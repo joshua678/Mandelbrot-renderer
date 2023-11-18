@@ -300,7 +300,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     DBOUT("\n\nBuild log:\n" << buildLog << "\n\n")
 
-        cl_kernel kernel = clCreateKernel(program, "mandelbrot_kernel", &err);
+    cl_kernel kernel = clCreateKernel(program, "mandelbrot_kernel", &err);
 
     int frameCounter = 0;
 
@@ -308,6 +308,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     for (int i = 0; i < totalPixels; ++i) {
         workQueue[i] = i;
     }
+
+
+    size_t global_work_size = 6400;
+    size_t local_work_size = NULL;
+
+    cl_mem d_workQueue = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * totalPixels, workQueue, &err);
+
+    int globalIndex = 0;
+    cl_mem d_globalIndex = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int), &globalIndex, &err);
 
     // Main render loop
     bool quit = false;
@@ -446,11 +455,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             //maxIterations = baseMaxIterations;
         }
 
-        cl_mem d_workQueue = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * totalPixels, workQueue, &err);
-
-        int globalIndex = 0;
-        cl_mem d_globalIndex = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int), &globalIndex, &err);
-
         err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_pixelArr);
         err = clSetKernelArg(kernel, 1, sizeof(int), &screenWidth);
         err = clSetKernelArg(kernel, 2, sizeof(int), &screenHeight);
@@ -461,13 +465,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
         err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
 
-        size_t global_work_size = 6400;
-        size_t local_work_size = NULL;
+        //these buffers are created at the same time as the GPU is working on the pixels
+
+        err = clEnqueueWriteBuffer(queue, d_workQueue, CL_FALSE, 0, sizeof(int) * totalPixels, workQueue, 0, NULL, NULL);
+        if (err != CL_SUCCESS) {
+            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
+            exit(1);
+        }
+
+        globalIndex = 0;
+        err = clEnqueueWriteBuffer(queue, d_globalIndex, CL_FALSE, 0, sizeof(int), &globalIndex, 0, NULL, NULL);
+        if (err != CL_SUCCESS) {
+            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
+            exit(1);
+        }
 
         profilingPoints[1] = std::chrono::high_resolution_clock::now();
 
         // Execute the kernel
         clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
+
         clFinish(queue);
 
         profilingPoints[2] = std::chrono::high_resolution_clock::now();
@@ -524,8 +541,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 profilingTimeMeans[i] = 0;
             }
         }
-        clReleaseMemObject(d_globalIndex);
-        clReleaseMemObject(d_workQueue);
     }
 
     delete[] devices;
@@ -538,6 +553,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     SDL_DestroyWindow(window);
     SDL_Quit();
 
+    clReleaseMemObject(d_globalIndex);
+    clReleaseMemObject(d_workQueue);
     clReleaseMemObject(d_pixelArr);
     clReleaseKernel(kernel);
     clReleaseProgram(program);
