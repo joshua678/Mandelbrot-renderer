@@ -1,10 +1,11 @@
 #pragma once
 
 const char* kernel_source =
-"int palette(double pos, double rateOfChange, int colour) {\n"
+"inline int palette(double pos, double rateOfChange, int colour) {\n" //pos between 1 and 0
 "	if (colour == 0) { return (int)round(127.5 * sin(rateOfChange * 2 * M_PI * pos + 1) + 127.5); }\n"
 "	if (colour == 1) { return (int)round(127.5 * sin(rateOfChange * 2 * M_PI * pos + (2.0 / 3.0) * M_PI + 1) + 127.5); }\n"
 "	if (colour == 2) { return (int)round(127.5 * sin(rateOfChange * 2 * M_PI * pos + (4.0 / 3.0) * M_PI + 1) + 127.5); }\n"
+"	return 0;"
 "}\n"
 "__kernel void mandelbrot_kernel(__global int* pixelArr, int screenWidth, int screenHeight, double zoom, double position_x, double position_y, int maxIterations, __global const int* workQueue, __global int* globalIndex) {\n"
 "   int i = get_global_id(0);\n"
@@ -44,9 +45,9 @@ const char* kernel_source =
 "       z[1] = temp;\n"
 "   }\n"
 "   double rationalIteration = iteration + 2 - log(log(z[0] * z[0] + z[1] * z[1])) / log((double)2);\n"
-"   pixelArr[pixelIndex] = palette((double)rationalIteration, 0.01, 0);\n" //red
-"   pixelArr[totalPixels + pixelIndex] = palette((double)rationalIteration, 0.01, 1);\n" //green
-"   pixelArr[totalPixels * 2 + pixelIndex] = palette((double)rationalIteration, 0.01, 2);\n" //blue
+"   pixelArr[pixelIndex] = palette(rationalIteration, 0.01, 0);\n" //red
+"   pixelArr[totalPixels + pixelIndex] = palette(rationalIteration, 0.01, 1);\n" //green
+"   pixelArr[totalPixels * 2 + pixelIndex] = palette(rationalIteration, 0.01, 2);\n" //blue
 "   idx = atomic_inc(globalIndex);\n"
 "   }\n"
 "}\n";

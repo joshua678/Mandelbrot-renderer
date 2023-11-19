@@ -24,9 +24,9 @@ long double moveSpeed = 0.15;
 long double zoomSpeed = 0.4;
 const bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
 const bool showFrameTime = 1;
-const bool fullscreen = 0;
-const int screenWidth = 1000;
-const int screenHeight = 1000;
+const bool fullscreen = 1;
+const int screenWidth = 1920;
+const int screenHeight = 1080;
 
 int writePixelArr[screenWidth * screenHeight * 3];
 int readPixelArr[screenWidth * screenHeight * 3];
@@ -44,11 +44,6 @@ SDL_Texture* texture = NULL;
    std::wostringstream os_;    \
    os_ << s;                   \
    OutputDebugStringW( os_.str().c_str() );  \
-}
-
-unsigned long RGBtoHex(int r, int g, int b)
-{
-    return ((r & 0xff) << 16) + ((g & 0xff) << 8) + (b & 0xff);
 }
 
 const char* getErrorString(cl_int error)
@@ -129,7 +124,9 @@ const char* getErrorString(cl_int error)
 }
 
 array<int, 3> palette(double pos, double size) {
-    return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (4.0 / 3.0) * M_PI) + 127.5) };
+    return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), 
+        (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), 
+        (int)round(127.5 * sin(2 * M_PI * pos + (4.0 / 3.0) * M_PI) + 127.5) };
 }
 
 void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
@@ -140,20 +137,135 @@ void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
 
 bool wKey = false, aKey = false, sKey = false, dKey = false,
 eKey = false, qKey = false, downKey = false, upKey = false;
+
 long double frameTime = 0;
 std::array<std::chrono::time_point<std::chrono::high_resolution_clock>, 4> profilingPoints;
 std::array<long double, 3> profilingTimeMeans;
 int frameCounter = 0;
 
-int* workQueue = new (std::nothrow) int[totalPixels];
+bool handleInput() { //returns true if program quit requested
+    SDL_Event event;
+    while (SDL_PollEvent(&event) != 0)
+    {
+        if (event.type == SDL_QUIT)
+        {
+            return true;
+        }
+        else if (event.type == SDL_KEYDOWN)
+        {
+            if (event.key.keysym.sym == SDLK_w)
+            {
+                wKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_a)
+            {
+                aKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_s)
+            {
+                sKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_d)
+            {
+                dKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_e)
+            {
+                eKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_q)
+            {
+                qKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_DOWN)
+            {
+                downKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_UP)
+            {
+                upKey = true;
+            }
+            if (event.key.keysym.sym == SDLK_LSHIFT)
+            {
+                zoomSpeed = 1.2;
+                moveSpeed = 0.45;
+            }
+        }
+        else if (event.type == SDL_KEYUP)
+        {
+            if (event.key.keysym.sym == SDLK_w)
+            {
+
+                wKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_a)
+            {
+                aKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_s)
+            {
+                sKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_d)
+            {
+                dKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_e)
+            {
+                eKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_q)
+            {
+                qKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_DOWN)
+            {
+                downKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_UP)
+            {
+                upKey = false;
+            }
+            if (event.key.keysym.sym == SDLK_LSHIFT)
+            {
+                zoomSpeed = 0.4;
+                moveSpeed = 0.15;
+            }
+        }
+    }
+    if (wKey == true) {
+        position[1] -= moveSpeed * zoom * frameTime;
+    }
+    if (aKey == true) {
+        position[0] -= moveSpeed * zoom * frameTime;
+    }
+    if (sKey == true) {
+        position[1] += moveSpeed * zoom * frameTime;
+    }
+    if (dKey == true) {
+        position[0] += moveSpeed * zoom * frameTime;
+    }
+    if (eKey == true) {
+        zoom /= (1 + zoomSpeed * frameTime);
+    }
+    if (qKey == true) {
+        zoom *= (1 + zoomSpeed * frameTime);
+    }
+    if (downKey == true) {
+        if (maxIterations > maxIterationsFloor) {
+            maxIterations /= (1 + 0.5 * frameTime);
+        }
+        DBOUT(maxIterations << "\n");
+    }
+    if (upKey == true) {
+        maxIterations *= (1 + 0.5 * frameTime);
+        DBOUT(maxIterations << "\n");
+    }
+    return false;
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
-    if (!workQueue) {
-        DBOUT("Memory allocation failed for workQueue" << std::endl);
-        return 0;
-    }
-
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -249,6 +361,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     cl_kernel kernel = clCreateKernel(program, "mandelbrot_kernel", &err);
 
+    int* workQueue = new int[totalPixels];
     for (int i = 0; i < totalPixels; ++i) {
         workQueue[i] = i;
     }
@@ -265,114 +378,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     bool quit = false;
     while (!quit)
     {
-
-        SDL_Event event;
-        while (SDL_PollEvent(&event) != 0)
-        {
-            if (event.type == SDL_QUIT)
-            {
-                quit = true;
-            }
-            else if (event.type == SDL_KEYDOWN)
-            {
-                if (event.key.keysym.sym == SDLK_w)
-                {
-                    wKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_a)
-                {
-                    aKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_s)
-                {
-                    sKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_d)
-                {
-                    dKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_e)
-                {
-                    eKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_q)
-                {
-                    qKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_DOWN)
-                {
-                    downKey = true;
-                }
-                if (event.key.keysym.sym == SDLK_UP)
-                {
-                    upKey = true;
-                }
-            }
-            else if (event.type == SDL_KEYUP)
-            {
-                if (event.key.keysym.sym == SDLK_w)
-                {
-
-                    wKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_a)
-                {
-                    aKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_s)
-                {
-                    sKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_d)
-                {
-                    dKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_e)
-                {
-                    eKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_q)
-                {
-                    qKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_DOWN)
-                {
-                    downKey = false;
-                }
-                if (event.key.keysym.sym == SDLK_UP)
-                {
-                    upKey = false;
-                }
-            }
-        }
-        if (wKey == true) {
-            position[1] -= moveSpeed * zoom * frameTime;
-        }
-        if (aKey == true) {
-            position[0] -= moveSpeed * zoom * frameTime;
-        }
-        if (sKey == true) {
-            position[1] += moveSpeed * zoom * frameTime;
-        }
-        if (dKey == true) {
-            position[0] += moveSpeed * zoom * frameTime;
-        }
-        if (eKey == true) {
-            zoom /= (1 + zoomSpeed * frameTime);
-        }
-        if (qKey == true) {
-            zoom *= (1 + zoomSpeed * frameTime);
-        }
-        if (downKey == true) {
-            if (maxIterations > maxIterationsFloor) {
-                maxIterations /= (1 + 0.5 * frameTime);
-            }
-            DBOUT(maxIterations << "\n");
-        }
-        if (upKey == true) {
-            maxIterations *= (1 + 0.5 * frameTime);
-            DBOUT(maxIterations << "\n");
-        }
+        quit = handleInput();
 
         std::swap(*readPixelArr, *writePixelArr);
         swapClMemObjects(d_readPixelArr, d_writePixelArr);
