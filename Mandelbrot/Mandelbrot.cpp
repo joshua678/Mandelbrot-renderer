@@ -22,8 +22,9 @@ long double position[2] = { -0.29,0 }; //view centre in the plane
 double zoom = 3;
 long double moveSpeed = 0.15;
 long double zoomSpeed = 0.4;
-bool showPalette = false; //set to true to show the palette instead of the mandlebrot render
+bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
 bool showFrameTime = 1;
+
 
 const int screenWidth = 1920;
 const int screenHeight = 1080;
@@ -35,6 +36,7 @@ int totalPixels = screenWidth * screenHeight;
 SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
 SDL_Surface* surface = NULL;
+SDL_Surface* finalSurface = NULL;
 SDL_Texture* texture = NULL;
 
 #define DBOUT( s )            \
@@ -126,7 +128,7 @@ const char* getErrorString(cl_int error)
     }
 }
 
-int* palette(double pos, double size) { //pos is between 0 and 1
+array<int, 3> palette(double pos, double size) { //pos is between 0 and 1
     double data[][4] = { //{position, red, green, blue}
         {size * 0, 32, 107, 203},
         {size * (double)1 / 15, 237, 255, 255},
@@ -146,7 +148,7 @@ int* palette(double pos, double size) { //pos is between 0 and 1
         {size * 1, 75, 0, 130}
     };
     int dataSize = sizeof(data) / sizeof(data[0]);
-    int result[] = { data[0][1], data[0][2], data[0][3] }; //rgb values
+    array<int, 3> result = { data[0][1], data[0][2], data[0][3] }; //rgb values
 
 
     for (int i = 0; i < dataSize - 1; i++) {
@@ -193,6 +195,9 @@ int* palette2(double pos, double size) { //pos is between 0 and 1
     return result;
 }
 
+array<int, 3> palette3(double pos, double size) { //pos is between 0 and 1
+    return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (4.0 / 3.0) * M_PI) + 127.5) };
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
@@ -506,7 +511,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (showPalette) {
             for (int l = 0; l < screenHeight; l++) {
                 for (int i = 0; i < screenWidth; i++) {
-                    pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, palette((double)l / screenWidth, 1)[0], palette((double)l / screenWidth, 1)[1], palette((double)l / screenWidth, 1)[2]);
+                    pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, palette3((double)l / screenHeight, 1)[0], palette3((double)l / screenHeight, 1)[1], palette3((double)l / screenHeight, 1)[2]);
                 }
             }
         }
@@ -547,6 +552,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     delete[] pixelArr;
     delete[] workQueue;
 
+    SDL_FreeSurface(finalSurface);
     SDL_DestroyTexture(texture);
     SDL_FreeSurface(surface);
     SDL_DestroyRenderer(renderer);
