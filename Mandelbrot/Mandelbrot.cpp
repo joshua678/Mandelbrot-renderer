@@ -1,7 +1,6 @@
 #include <iostream>
 #include <SDL/SDL.h>
 #include <chrono>
-#include <thread>
 #include <Windows.h>
 #include <ppl.h>
 #include <vector>
@@ -10,6 +9,7 @@
 #include <CL/cl.h>
 #include "Kernel.h"
 #include <array>
+#include <omp.h>
 
 #define MAX_SOURCE_SIZE (0x100000)
 
@@ -22,14 +22,14 @@ long double position[2] = { -0.29,0 }; //view centre in the plane
 double zoom = 3;
 long double moveSpeed = 0.15;
 long double zoomSpeed = 0.4;
-bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
-bool showFrameTime = 1;
+const bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
+const bool showFrameTime = 1;
+const bool fullscreen = 0;
+const int screenWidth = 1000;
+const int screenHeight = 1000;
 
-
-const int screenWidth = 1920;
-const int screenHeight = 1080;
-
-int pixelArr[screenWidth * screenHeight * 3];
+int writePixelArr[screenWidth * screenHeight * 3];
+int readPixelArr[screenWidth * screenHeight * 3];
 
 int totalPixels = screenWidth * screenHeight;
 
@@ -128,84 +128,31 @@ const char* getErrorString(cl_int error)
     }
 }
 
-array<int, 3> palette(double pos, double size) { //pos is between 0 and 1
-    double data[][4] = { //{position, red, green, blue}
-        {size * 0, 32, 107, 203},
-        {size * (double)1 / 15, 237, 255, 255},
-        {size * (double)2 / 15, 255, 170, 0},
-        {size * (double)3 / 15, 0, 2, 0},
-        {size * (double)4 / 15, 255, 0, 0},
-        {size * (double)5 / 15, 0, 255, 0},
-        {size * (double)6 / 15, 0, 0, 255},
-        {size * (double)7 / 15, 255, 255, 0},
-        {size * (double)8 / 15, 255, 0, 255},
-        {size * (double)9 / 15, 0, 255, 255},
-        {size * (double)10 / 15, 255, 128, 0},
-        {size * (double)11 / 15, 128, 255, 0},
-        {size * (double)12 / 15, 0, 255, 128},
-        {size * (double)13 / 15, 128, 0, 255},
-        {size * (double)14 / 15, 255, 0, 128},
-        {size * 1, 75, 0, 130}
-    };
-    int dataSize = sizeof(data) / sizeof(data[0]);
-    array<int, 3> result = { data[0][1], data[0][2], data[0][3] }; //rgb values
-
-
-    for (int i = 0; i < dataSize - 1; i++) {
-        if (pos > data[i][0] && pos <= data[i + 1][0]) {
-            result[0] = data[i][1] + (pos - data[i][0]) * (data[i + 1][1] - data[i][1]) * (1 / (data[i + 1][0] - data[i][0]));
-            result[1] = data[i][2] + (pos - data[i][0]) * (data[i + 1][2] - data[i][2]) * (1 / (data[i + 1][0] - data[i][0]));
-            result[2] = data[i][3] + (pos - data[i][0]) * (data[i + 1][3] - data[i][3]) * (1 / (data[i + 1][0] - data[i][0]));
-        }
-    }
-
-    return result;
-}
-
-int* palette2(double pos, double size) { //pos is between 0 and 1
-    double data[][4] = { //{position, red, green, blue}
-        {size * 0, 66, 30, 15},
-        {size * (double)1 / 15, 25, 7, 26},
-        {size * (double)2 / 15, 9, 1, 47},
-        {size * (double)3 / 15, 4, 4, 73},
-        {size * (double)4 / 15, 0, 7, 100},
-        {size * (double)5 / 15, 12, 44, 138},
-        {size * (double)6 / 15, 24, 82, 177},
-        {size * (double)7 / 15, 57, 125, 209},
-        {size * (double)8 / 15, 134, 181, 229},
-        {size * (double)9 / 15, 211, 236, 248},
-        {size * (double)10 / 15, 241, 233, 191},
-        {size * (double)11 / 15, 248, 201, 95},
-        {size * (double)12 / 15, 255, 170, 0},
-        {size * (double)13 / 15, 204, 128, 0},
-        {size * (double)14 / 15, 153, 87, 0},
-        {size * 1, 106, 52, 3}
-    };
-    int dataSize = sizeof(data) / sizeof(data[0]);
-    int result[] = { data[0][1], data[0][2], data[0][3] }; //rgb values
-
-    for (int i = 0; i < dataSize - 1; i++) {
-        if (pos > data[i][0] && pos <= data[i + 1][0]) {
-            result[0] = (int)(data[i][1] + (pos - data[i][0]) * (data[i + 1][1] - data[i][1]) * (1 / (data[i + 1][0] - data[i][0])));
-            result[1] = (int)(data[i][2] + (pos - data[i][0]) * (data[i + 1][2] - data[i][2]) * (1 / (data[i + 1][0] - data[i][0])));
-            result[2] = (int)(data[i][3] + (pos - data[i][0]) * (data[i + 1][3] - data[i][3]) * (1 / (data[i + 1][0] - data[i][0])));
-        }
-    }
-
-    return result;
-}
-
-array<int, 3> palette3(double pos, double size) { //pos is between 0 and 1
+array<int, 3> palette(double pos, double size) {
     return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), (int)round(127.5 * sin(2 * M_PI * pos + (4.0 / 3.0) * M_PI) + 127.5) };
 }
 
+void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
+    cl_mem temp = mem1;
+    mem1 = mem2;
+    mem2 = temp;
+}
+
+bool wKey = false, aKey = false, sKey = false, dKey = false,
+eKey = false, qKey = false, downKey = false, upKey = false;
+long double frameTime = 0;
+std::array<std::chrono::time_point<std::chrono::high_resolution_clock>, 4> profilingPoints;
+std::array<long double, 3> profilingTimeMeans;
+int frameCounter = 0;
+
+int* workQueue = new (std::nothrow) int[totalPixels];
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
-    std::array<std::chrono::time_point<std::chrono::high_resolution_clock>, 6> profilingPoints;
-    std::array<long double, 5> profilingTimeMeans;
-
-    long double frameTime = 0;
-
+    if (!workQueue) {
+        DBOUT("Memory allocation failed for workQueue" << std::endl);
+        return 0;
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
@@ -214,8 +161,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-
-    window = SDL_CreateWindow("Mandlebrot :)", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screenWidth, screenHeight, SDL_WINDOW_SHOWN);
+    if (fullscreen) {
+        window = SDL_CreateWindow("Mandlebrot :)", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screenWidth, screenHeight, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    }
+    else {
+        window = SDL_CreateWindow("Mandlebrot :)", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screenWidth, screenHeight, SDL_WINDOW_SHOWN);
+    }
     if (window == NULL)
     {
         printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
@@ -224,7 +175,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL)
     {
@@ -236,7 +186,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-
     surface = SDL_CreateRGBSurface(0, screenWidth, screenHeight, 32, 0, 0, 0, 0);
     if (surface == NULL)
     {
@@ -249,7 +198,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-
     texture = SDL_CreateTextureFromSurface(renderer, surface);
     if (texture == NULL)
     {
@@ -263,11 +211,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-
-    bool wKey = false, aKey = false, sKey = false, dKey = false,
-        eKey = false, qKey = false, downKey = false, upKey = false;
-
-    // OpenCL setup
     cl_device_id* devices = new cl_device_id[1];
     cl_uint num_devices;
     cl_platform_id* platforms;
@@ -275,23 +218,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     clGetPlatformIDs(0, NULL, &num_platforms);
     platforms = new cl_platform_id[num_platforms];
     clGetPlatformIDs(num_platforms, platforms, NULL);
-
     cl_int err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 1, &devices[0], &num_devices);
     if (err != CL_SUCCESS) {
         std::cerr << "Error: Failed to retrieve device IDs!" << std::endl;
         exit(1);
     }
     cl_device_id device = devices[0];
-
     DBOUT("\n\ndevice: " << device << "\n\n");
-
     cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
     cl_queue_properties queue_properties = 0;
     cl_command_queue queue = clCreateCommandQueueWithProperties(context, device, &queue_properties, &err);
 
-    cl_mem d_pixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, totalPixels * sizeof(int) * 3, NULL, &err);
+    cl_mem d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, totalPixels * sizeof(int) * 3, NULL, &err);
+    cl_mem d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, totalPixels * sizeof(int) * 3, NULL, &err);
 
-    err = clEnqueueWriteBuffer(queue, d_pixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, pixelArr, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, writePixelArr, 0, NULL, NULL);
 
     cl_program program = clCreateProgramWithSource(context, 1, &kernel_source, NULL, &err);
     clBuildProgram(program, 1, &device, NULL, NULL, NULL);
@@ -307,13 +249,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     cl_kernel kernel = clCreateKernel(program, "mandelbrot_kernel", &err);
 
-    int frameCounter = 0;
-
-    int* workQueue = new int[totalPixels];
     for (int i = 0; i < totalPixels; ++i) {
         workQueue[i] = i;
     }
-
 
     size_t global_work_size = 6400;
     size_t local_work_size = NULL;
@@ -327,7 +265,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     bool quit = false;
     while (!quit)
     {
-        profilingPoints[0] = std::chrono::high_resolution_clock::now();
 
         SDL_Event event;
         while (SDL_PollEvent(&event) != 0)
@@ -340,42 +277,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             {
                 if (event.key.keysym.sym == SDLK_w)
                 {
-                    // "w" key is pressed
                     wKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_a)
                 {
-                    // "a" key is pressed
                     aKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_s)
                 {
-                    // "s" key is pressed
                     sKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_d)
                 {
-                    // "d" key is pressed
                     dKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_e)
                 {
-                    // "e" key is pressed
                     eKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_q)
                 {
-                    // "q" key is pressed
                     qKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_DOWN)
                 {
-                    // "q" key is pressed
                     downKey = true;
                 }
                 if (event.key.keysym.sym == SDLK_UP)
                 {
-                    // "q" key is pressed
                     upKey = true;
                 }
             }
@@ -383,84 +312,72 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             {
                 if (event.key.keysym.sym == SDLK_w)
                 {
-                    // "w" key is released
+
                     wKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_a)
                 {
-                    // "a" key is released
                     aKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_s)
                 {
-                    // "s" key is released
                     sKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_d)
                 {
-                    // "d" key is released
                     dKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_e)
                 {
-                    // "e" key is released
                     eKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_q)
                 {
-                    // "q" key is released
                     qKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_DOWN)
                 {
-                    // "q" key is pressed
                     downKey = false;
                 }
                 if (event.key.keysym.sym == SDLK_UP)
                 {
-                    // "q" key is pressed
                     upKey = false;
                 }
             }
         }
         if (wKey == true) {
             position[1] -= moveSpeed * zoom * frameTime;
-            //maxIterations = baseMaxIterations;
         }
         if (aKey == true) {
             position[0] -= moveSpeed * zoom * frameTime;
-            //maxIterations = baseMaxIterations;
         }
         if (sKey == true) {
             position[1] += moveSpeed * zoom * frameTime;
-            //maxIterations = baseMaxIterations;
         }
         if (dKey == true) {
             position[0] += moveSpeed * zoom * frameTime;
-            //maxIterations = baseMaxIterations;
         }
         if (eKey == true) {
             zoom /= (1 + zoomSpeed * frameTime);
-            //maxIterations = baseMaxIterations;
         }
         if (qKey == true) {
             zoom *= (1 + zoomSpeed * frameTime);
-            //maxIterations = baseMaxIterations;
         }
         if (downKey == true) {
             if (maxIterations > maxIterationsFloor) {
                 maxIterations /= (1 + 0.5 * frameTime);
             }
             DBOUT(maxIterations << "\n");
-            //maxIterations = baseMaxIterations;
         }
         if (upKey == true) {
             maxIterations *= (1 + 0.5 * frameTime);
             DBOUT(maxIterations << "\n");
-            //maxIterations = baseMaxIterations;
         }
 
-        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_pixelArr);
+        std::swap(*readPixelArr, *writePixelArr);
+        swapClMemObjects(d_readPixelArr, d_writePixelArr);
+
+        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
         err = clSetKernelArg(kernel, 1, sizeof(int), &screenWidth);
         err = clSetKernelArg(kernel, 2, sizeof(int), &screenHeight);
         err = clSetKernelArg(kernel, 3, sizeof(double), &zoom);
@@ -470,7 +387,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
         err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
 
-        //these buffers are created at the same time as the GPU is working on the pixels
+        profilingPoints[0] = std::chrono::high_resolution_clock::now();
 
         err = clEnqueueWriteBuffer(queue, d_workQueue, CL_FALSE, 0, sizeof(int) * totalPixels, workQueue, 0, NULL, NULL);
         if (err != CL_SUCCESS) {
@@ -485,33 +402,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             exit(1);
         }
 
-        profilingPoints[1] = std::chrono::high_resolution_clock::now();
+        // Transfer data from device to host
+        err = clEnqueueReadBuffer(queue, d_readPixelArr, CL_FALSE, 0, totalPixels * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
+
+        uint32_t* pixels = (uint32_t*)surface->pixels;
 
         // Execute the kernel
         clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
+
+#pragma omp parallel for
+        for (int l = 0; l < screenHeight; l++) {
+            for (int i = 0; i < screenWidth; i++) {
+                pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, readPixelArr[l * screenWidth + i], readPixelArr[totalPixels + l * screenWidth + i], readPixelArr[totalPixels * 2 + l * screenWidth + i]);
+            }
+        }
+
+        profilingPoints[1] = std::chrono::high_resolution_clock::now();
 
         clFinish(queue);
 
         profilingPoints[2] = std::chrono::high_resolution_clock::now();
 
-        // Transfer data from device to host
-        err = clEnqueueReadBuffer(queue, d_pixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, pixelArr, 0, NULL, NULL);
-
-        profilingPoints[3] = std::chrono::high_resolution_clock::now();
-
-        uint32_t* pixels = (uint32_t*)surface->pixels;
-        parallel_for(0, screenHeight, [&](int l) {
-            for (int i = 0; i < screenWidth; i++) {
-                pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, pixelArr[l * screenWidth + i], pixelArr[totalPixels + l * screenWidth + i], pixelArr[totalPixels * 2 + l * screenWidth + i]);
-            }
-            });
-
-        profilingPoints[4] = std::chrono::high_resolution_clock::now();
-
         if (showPalette) {
             for (int l = 0; l < screenHeight; l++) {
                 for (int i = 0; i < screenWidth; i++) {
-                    pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, palette3((double)l / screenHeight, 1)[0], palette3((double)l / screenHeight, 1)[1], palette3((double)l / screenHeight, 1)[2]);
+                    pixels[l * screenWidth + i] = SDL_MapRGB(surface->format, palette((double)l / screenHeight, 1)[0], palette((double)l / screenHeight, 1)[1], palette((double)l / screenHeight, 1)[2]);
                 }
             }
         }
@@ -524,24 +439,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         SDL_RenderPresent(renderer);
 
-        profilingPoints[5] = std::chrono::high_resolution_clock::now();
+        profilingPoints[3] = std::chrono::high_resolution_clock::now();
 
         frameCounter++;
 
         int frameCountMean = 100;
         double meanFrameTime;
-        frameTime = (long double)(chrono::duration_cast<chrono::microseconds>(profilingPoints[5] - profilingPoints[0]).count()) / 1000000;
+        frameTime = (long double)(chrono::duration_cast<chrono::microseconds>(profilingPoints[3] - profilingPoints[0]).count()) / 1000000;
         for (int i = 0; i < profilingTimeMeans.size(); i++) {
             profilingTimeMeans[i] += (long double)(chrono::duration_cast<chrono::microseconds>(profilingPoints[i + 1] - profilingPoints[i]).count()) / 1000000 / 100;
         }
         if (showFrameTime && frameCounter % 100 == 0) {
-            meanFrameTime = profilingTimeMeans[0] + profilingTimeMeans[1] + profilingTimeMeans[2] + profilingTimeMeans[3] + profilingTimeMeans[4];
+            meanFrameTime = profilingTimeMeans[0] + profilingTimeMeans[1] + profilingTimeMeans[2];
             DBOUT(endl << "-total frame time: " << meanFrameTime << endl);
-            DBOUT("time spent sending data to GPU & using GPU: " << profilingTimeMeans[1] << "(" << round((profilingTimeMeans[1] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent collecting data from GPU: " << profilingTimeMeans[2] << "(" << round((profilingTimeMeans[2] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent getting image ready: " << profilingTimeMeans[3] << "(" << round((profilingTimeMeans[3] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent updating screen: " << profilingTimeMeans[4] << "(" << round((profilingTimeMeans[4] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent on other: " << profilingTimeMeans[0] << "(" << round((profilingTimeMeans[0] / meanFrameTime) * 100) << "%)" << endl);
+            DBOUT("time spent iterating pixels on GPU while writing/reading buffers and getting image ready in parallel: " << profilingTimeMeans[0] << "(" << round((profilingTimeMeans[0] / meanFrameTime) * 100) << "%)" << endl);
+            //DBOUT("time spent collecting data from GPU: " << profilingTimeMeans[2] << "(" << round((profilingTimeMeans[2] / meanFrameTime) * 100) << "%)" << endl);
+            DBOUT("time spent in GPU alone: " << profilingTimeMeans[1] << "(" << round((profilingTimeMeans[1] / meanFrameTime) * 100) << "%)" << endl);
+            DBOUT("time spent displaying image: " << profilingTimeMeans[2] << "(" << round((profilingTimeMeans[2] / meanFrameTime) * 100) << "%)" << endl);
             for (int i = 0; i < profilingTimeMeans.size(); i++) {
                 profilingTimeMeans[i] = 0;
             }
@@ -549,7 +463,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     delete[] devices;
-    delete[] pixelArr;
+    delete[] readPixelArr;
+    delete[] writePixelArr;
     delete[] workQueue;
 
     SDL_FreeSurface(finalSurface);
@@ -561,7 +476,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     clReleaseMemObject(d_globalIndex);
     clReleaseMemObject(d_workQueue);
-    clReleaseMemObject(d_pixelArr);
+    clReleaseMemObject(d_writePixelArr);
+    clReleaseMemObject(d_readPixelArr);
     clReleaseKernel(kernel);
     clReleaseProgram(program);
     clReleaseCommandQueue(queue);
