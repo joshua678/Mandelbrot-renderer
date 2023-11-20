@@ -26,8 +26,9 @@ long double zoomSpeed = 0.4;
 const bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
 const bool showFrameTime = 1;
 const bool fullscreen = 0;
-const int screenWidth = 1024;
-const int screenHeight = 1024;
+const int screenWidth = 1000;
+const int screenHeight = 1000;
+int colouringScheme = 1;
 
 int writePixelArr[screenWidth * screenHeight * 3];
 int readPixelArr[screenWidth * screenHeight * 3];
@@ -190,6 +191,10 @@ bool handleInput() { //returns true if program quit requested
             {
                 zoomSpeed = 1.2;
                 moveSpeed = 0.45;
+            }
+            if (event.key.keysym.sym == SDLK_SPACE)
+            {
+                colouringScheme = (colouringScheme + 1) % 2;
             }
         }
         else if (event.type == SDL_KEYUP)
@@ -408,6 +413,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         err = clSetKernelArg(kernel, 6, sizeof(int), &maxIterations);
         err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
         err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
+        err = clSetKernelArg(kernel, 9, sizeof(int), &colouringScheme);
 
         profilingPoints[0] = std::chrono::high_resolution_clock::now();
 
