@@ -10,6 +10,7 @@
 #include "Kernel.h"
 #include <array>
 #include <omp.h>
+#include <fstream>
 
 #define MAX_SOURCE_SIZE (0x100000)
 
@@ -24,9 +25,9 @@ long double moveSpeed = 0.15;
 long double zoomSpeed = 0.4;
 const bool showPalette = 0; //set to true to show the palette instead of the mandlebrot render
 const bool showFrameTime = 1;
-const bool fullscreen = 1;
-const int screenWidth = 1920;
-const int screenHeight = 1080;
+const bool fullscreen = 0;
+const int screenWidth = 1024;
+const int screenHeight = 1024;
 
 int writePixelArr[screenWidth * screenHeight * 3];
 int readPixelArr[screenWidth * screenHeight * 3];
@@ -264,8 +265,23 @@ bool handleInput() { //returns true if program quit requested
     return false;
 }
 
+std::string loadKernelSource(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file: " << filename << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
+    std::string kernelSource = loadKernelSource("Kernel.cl");
+    const char* sourceStr = kernelSource.c_str();
+    //size_t sourceSize = kernelSource.size();
+
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -347,7 +363,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
     err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, totalPixels * sizeof(int) * 3, writePixelArr, 0, NULL, NULL);
 
-    cl_program program = clCreateProgramWithSource(context, 1, &kernel_source, NULL, &err);
+    cl_program program = clCreateProgramWithSource(context, 1, &sourceStr, NULL, &err);
     clBuildProgram(program, 1, &device, NULL, NULL, NULL);
 
     char buildLog[16384];

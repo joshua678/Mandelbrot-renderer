@@ -152,6 +152,9 @@
   <ItemGroup>
     <ClInclude Include="Kernel.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Kernel.cl" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
