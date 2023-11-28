@@ -20,12 +20,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Kernel.h">
+    <None Include="Mandelbrot Kernel.cl">
       <Filter>Header Files</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="Kernel.cl">
+    </None>
+    <None Include="Julia Kernel.cl">
       <Filter>Header Files</Filter>
     </None>
   </ItemGroup>
