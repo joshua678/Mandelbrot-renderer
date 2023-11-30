@@ -17,24 +17,54 @@
 using namespace std;
 using namespace concurrency;
 
-const bool showPalette = 0;
 const bool debugFrameTime = 1;
 const bool fullscreen = 1;
 bool FPSCounter = 1;
 bool shouldRenderJuliaSet = 1;
-const int screenWidth = 1920;
-const int screenHeight = 1080;
-int mandelbrotGap = 30; //in pixels
+int mandelbrotGap = 15; //in pixels
+int frameRateCap = 0; //set to 0 for native refresh rate
+//set to 0 to get native resolution
+int screenWidth = 0;
+int screenHeight = 0;
+
+SDL_Window* window = NULL;
+SDL_Renderer* renderer = NULL;
+
+bool wKey = false, aKey = false, sKey = false, dKey = false,
+eKey = false, qKey = false, downKey = false, upKey = false,
+leftMouseButtonHeld = false;
+array<int, 2> mousePos = { 0, 0 };
+
+std::chrono::time_point<std::chrono::high_resolution_clock> frameStart;
+std::chrono::time_point<std::chrono::high_resolution_clock> frameEnd;
+double deltaTime = 1;
+int frameCounter = 0;
+int fps = 0;
+double timer = 0;
+double timerPoint = 0;
+int frameCounterPoint = 0;
+double frameStall = 0;
+
+#define DBOUT( s )            \
+{                             \
+   std::wostringstream os_;    \
+   os_ << s;                   \
+   OutputDebugStringW( os_.str().c_str() );  \
+}
 
 struct fractal {
+private:
+    Uint32 rmask, gmask, bmask, amask;
+public:
     int maxIterations = 1024;
     int maxIterationsFloor = 10;
     long double position[2] = { 0,0 }; //view centre in the plane
     double zoom = 3;
     long double moveSpeed = 0.15;
     long double zoomSpeed = 0.4;
-    int colouringScheme = 1;
+    int colouringScheme = 0;
 
+    string type;
     SDL_Surface* surface = NULL;
     SDL_Texture* texture = NULL;
     int* writePixelArr;
@@ -52,8 +82,10 @@ struct fractal {
     cl_mem d_workQueue;
     int globalIndex = 0;
     cl_mem d_globalIndex;
+    int framesToUpdate = 0;
 
     fractal(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) {
+        type = "fractal";
         cl_int err;
         width = newWidth;
         height = newHeight;
@@ -61,7 +93,19 @@ struct fractal {
         readPixelArr = new int[width * height * 3];
         workQueue = new int[width * height];
 
-        surface = SDL_CreateRGBSurface(0, width, height, 32, 0, 0, 0, 0);
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+        rmask = 0xff000000;
+        gmask = 0x00ff0000;
+        bmask = 0x0000ff000;
+        amask = 0x000000ff;
+#else // SDL_BYTEORDER == SDL_LIL_ENDIAN
+        rmask = 0x000000ff;
+        gmask = 0x0000ff00;
+        bmask = 0x00ff0000;
+        amask = 0xff000000;
+#endif
+
+        surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
         if (surface == NULL)
         {
             printf("Surface could not be created! SDL_Error: %s\n", SDL_GetError());
@@ -133,22 +177,202 @@ struct fractal {
             SDL_FreeSurface(surface);
         }
     }
+
+    void mapRGBReadPixelArr(uint32_t* pixelsToSet) {
+#pragma omp parallel for
+        for (int l = 0; l < height; l++) {
+            for (int i = 0; i < width; i++) {
+                pixelsToSet[l * width + i] = SDL_MapRGB(surface->format,
+                    readPixelArr[l * width + i],
+                    readPixelArr[width * height + l * width + i],
+                    readPixelArr[width * height * 2 + l * width + i]);
+            }
+        }
+    }
+
+    void writeBuffers() {
+        cl_int err;
+        err = clEnqueueWriteBuffer(queue, d_workQueue, CL_FALSE, 0, sizeof(int) * width * height, workQueue, 0, NULL, NULL);
+        if (err != CL_SUCCESS) {
+            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
+            exit(1);
+        }
+        globalIndex = 0;
+        err = clEnqueueWriteBuffer(queue, d_globalIndex, CL_FALSE, 0, sizeof(int), &globalIndex, 0, NULL, NULL);
+        if (err != CL_SUCCESS) {
+            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
+            exit(1);
+        }
+    }
+
+    void resize(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) {
+        // Release OpenCL resources
+        if (queue) {
+            clReleaseCommandQueue(queue);
+        }
+        if (d_readPixelArr) {
+            clReleaseMemObject(d_readPixelArr);
+        }
+        if (d_writePixelArr) {
+            clReleaseMemObject(d_writePixelArr);
+        }
+        if (d_workQueue) {
+            clReleaseMemObject(d_workQueue);
+        }
+        if (d_globalIndex) {
+            clReleaseMemObject(d_globalIndex);
+        }
+
+        // Release dynamically allocated arrays
+        delete[] writePixelArr;
+        delete[] readPixelArr;
+        delete[] workQueue;
+
+        // Release SDL resources
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
+        if (surface) {
+            SDL_FreeSurface(surface);
+        }
+
+        cl_int err;
+        width = newWidth;
+        height = newHeight;
+        writePixelArr = new int[width * height * 3];
+        readPixelArr = new int[width * height * 3];
+        workQueue = new int[width * height];
+
+        surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
+        if (surface == NULL)
+        {
+            printf("Surface could not be created! SDL_Error: %s\n", SDL_GetError());
+
+            SDL_FreeSurface(surface);
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+        }
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+        if (texture == NULL)
+        {
+            printf("Texture could not be created! SDL_Error: %s\n", SDL_GetError());
+
+            SDL_DestroyTexture(texture);
+            SDL_FreeSurface(surface);
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+        }
+
+        queueProperties = 0;
+        queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
+        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(int) * 3, NULL, &err);
+        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(int) * 3, NULL, &err);
+
+        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, writePixelArr, 0, NULL, NULL);
+
+        for (int i = 0; i < width * height; ++i) {
+            workQueue[i] = i;
+        }
+
+        globalWorkSize = 6400;
+        localWorkSize = NULL;
+        d_workQueue = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * width * height, workQueue, &err);
+        globalIndex = 0;
+        d_globalIndex = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int), &globalIndex, &err);
+    }
 };
 
-//struct mandelbrotSet : fractal {
-//
-//};
-//
-//struct JuliaSet : fractal {
-//
-//};
+struct mandelbrotSet : fractal {
+    mandelbrotSet(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device)
+        : fractal(newWidth, newHeight, renderer, window, context, device) {
+        type = "mandelbrotSet";
+        framesToUpdate = 4;
+    }
+    void setKernelArgs(cl_kernel& kernel) {
+        cl_int err;
+        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
+        err = clSetKernelArg(kernel, 1, sizeof(int), &width);
+        err = clSetKernelArg(kernel, 2, sizeof(int), &height);
+        err = clSetKernelArg(kernel, 3, sizeof(double), &zoom);
+        err = clSetKernelArg(kernel, 4, sizeof(double), &position[0]);
+        err = clSetKernelArg(kernel, 5, sizeof(double), &position[1]);
+        err = clSetKernelArg(kernel, 6, sizeof(int), &maxIterations);
+        err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
+        err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
+        err = clSetKernelArg(kernel, 9, sizeof(int), &colouringScheme);
+    }
+};
 
-#define DBOUT( s )            \
-{                             \
-   std::wostringstream os_;    \
-   os_ << s;                   \
-   OutputDebugStringW( os_.str().c_str() );  \
-}
+struct juliaSet : fractal {
+    array<double, 2> index = { 0, 0 };
+    juliaSet(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device)
+        : fractal(newWidth, newHeight, renderer, window, context, device) {
+        type = "juliaSet";
+    }
+    void setKernelArgs(cl_kernel &kernel) {
+        cl_int err;
+        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
+        err = clSetKernelArg(kernel, 1, sizeof(int), &(width));
+        err = clSetKernelArg(kernel, 2, sizeof(int), &(height));
+        err = clSetKernelArg(kernel, 3, sizeof(double), &zoom);
+        err = clSetKernelArg(kernel, 4, sizeof(double), &position[0]);
+        err = clSetKernelArg(kernel, 5, sizeof(double), &position[1]);
+        err = clSetKernelArg(kernel, 6, sizeof(int), &maxIterations);
+        err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
+        err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
+        err = clSetKernelArg(kernel, 9, sizeof(int), &colouringScheme);
+        err = clSetKernelArg(kernel, 10, sizeof(double), &index[0]);
+        err = clSetKernelArg(kernel, 11, sizeof(double), &index[1]);
+    }
+};
+
+struct text {
+    TTF_Font* font;
+    SDL_Color colour = { 0, 0, 0, 255 };
+    string textStr;
+    SDL_Surface* surface;
+    SDL_Texture* texture;
+    SDL_Rect rect;
+    int x, y;
+
+    text(string newText, int newX, int newY, int newSize) {
+        textStr = newText;
+        x = newX;
+        y = newY;
+        font = TTF_OpenFont("../Resources/Arial.ttf", newSize);
+        surface = TTF_RenderText_Solid(font, textStr.c_str(), colour);
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+        rect = { x, y, surface->w, surface->h };
+    }
+
+    ~text() {
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
+        if (surface) {
+            SDL_FreeSurface(surface);
+        }
+        if (font) {
+            TTF_CloseFont(font);
+        }
+    }
+
+    void setText(string newText) {
+        textStr = newText;
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
+        if (surface) {
+            SDL_FreeSurface(surface);
+        }
+        surface = TTF_RenderText_Solid(font, textStr.c_str(), colour);
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+        rect = { x, y, surface->w, surface->h };
+    }
+};
 
 const char* getErrorString(cl_int error)
 {
@@ -239,30 +463,7 @@ void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
     mem2 = temp;
 }
 
-SDL_Window* window = NULL;
-SDL_Renderer* renderer = NULL;
-
-array<double, 2> juliaIndex = { 0, 0 };
-
-bool wKey = false, aKey = false, sKey = false, dKey = false,
-eKey = false, qKey = false, downKey = false, upKey = false,
-rightMouseButtonHeld = false;
-bool shouldUpdateJulia = false;
-array<int, 2> mousePos = { 0, 0 };
-
-long double frameTime = 0;
-std::array<std::chrono::time_point<std::chrono::high_resolution_clock>, 4> profilingPoints;
-std::array<long double, 3> profilingTimeMeans;
-std::chrono::time_point<std::chrono::high_resolution_clock> frameStart;
-std::chrono::time_point<std::chrono::high_resolution_clock> frameEnd;
-double deltaTime = 1;
-int frameCounter = 0;
-int fps = 0;
-double timer = 0;
-double timerPoint = 0;
-int frameCounterPoint = 0;
-
-bool handleInput(fractal &mandelbrot) { //returns true if program quit requested
+bool handleInput(fractal &activeFractal, mandelbrotSet &mandelbrot, juliaSet &julia) { //returns true if program quit requested
     SDL_Event event;
     while (SDL_PollEvent(&event) != 0)
     {
@@ -306,20 +507,20 @@ bool handleInput(fractal &mandelbrot) { //returns true if program quit requested
             }
             if (event.key.keysym.sym == SDLK_LSHIFT)
             {
-                mandelbrot.zoomSpeed = 1.2;
-                mandelbrot.moveSpeed = 0.45;
+                activeFractal.zoomSpeed = 1.2;
+                activeFractal.moveSpeed = 0.45;
             }
             if (event.key.keysym.sym == SDLK_SPACE)
             {
-                mandelbrot.colouringScheme = (mandelbrot.colouringScheme + 1) % 2;
-                shouldUpdateJulia = true;
+                activeFractal.colouringScheme = (activeFractal.colouringScheme + 1) % 2;
+                julia.framesToUpdate = 4;
+                mandelbrot.framesToUpdate = 4;
             }
         }
         else if (event.type == SDL_KEYUP)
         {
             if (event.key.keysym.sym == SDLK_w)
             {
-
                 wKey = false;
             }
             if (event.key.keysym.sym == SDLK_a)
@@ -352,59 +553,74 @@ bool handleInput(fractal &mandelbrot) { //returns true if program quit requested
             }
             if (event.key.keysym.sym == SDLK_LSHIFT)
             {
-                mandelbrot.zoomSpeed = 0.4;
-                mandelbrot.moveSpeed = 0.15;
+                activeFractal.zoomSpeed = 0.4;
+                activeFractal.moveSpeed = 0.15;
             }
         }
         else if (event.type == SDL_MOUSEBUTTONDOWN) {
-            if (event.button.button == SDL_BUTTON_RIGHT) {
-                rightMouseButtonHeld = true;
+            if (event.button.button == SDL_BUTTON_LEFT) {
+                leftMouseButtonHeld = true;
             }
         }
         else if (event.type == SDL_MOUSEBUTTONUP) {
-            if (event.button.button == SDL_BUTTON_RIGHT) {
-                rightMouseButtonHeld = false;
+            if (event.button.button == SDL_BUTTON_LEFT) {
+                leftMouseButtonHeld = false;
             }
         }
     }
     if (wKey == true) {
-        mandelbrot.position[1] -= mandelbrot.moveSpeed * mandelbrot.zoom * frameTime;
+        activeFractal.position[1] -= activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
+        activeFractal.framesToUpdate = 4;
     }
     if (aKey == true) {
-        mandelbrot.position[0] -= mandelbrot.moveSpeed * mandelbrot.zoom * frameTime;
+        activeFractal.position[0] -= activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
+        activeFractal.framesToUpdate = 4;
     }
     if (sKey == true) {
-        mandelbrot.position[1] += mandelbrot.moveSpeed * mandelbrot.zoom * frameTime;
+        activeFractal.position[1] += activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
+        activeFractal.framesToUpdate = 4;
     }
     if (dKey == true) {
-        mandelbrot.position[0] += mandelbrot.moveSpeed * mandelbrot.zoom * frameTime;
+        activeFractal.position[0] += activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
+        activeFractal.framesToUpdate = 4;
     }
     if (eKey == true) {
-        mandelbrot.zoom /= (1 + mandelbrot.zoomSpeed * frameTime);
+        activeFractal.zoom /= (1 + activeFractal.zoomSpeed * deltaTime);
+        activeFractal.framesToUpdate = 4;
     }
     if (qKey == true) {
-        mandelbrot.zoom *= (1 + mandelbrot.zoomSpeed * frameTime);
+        activeFractal.zoom *= (1 + activeFractal.zoomSpeed * deltaTime);
+        activeFractal.framesToUpdate = 4;
     }
     if (downKey == true) {
-        if (mandelbrot.maxIterations > mandelbrot.maxIterationsFloor) {
-            mandelbrot.maxIterations /= (1 + 0.5 * frameTime);
+        if (activeFractal.maxIterations > activeFractal.maxIterationsFloor) {
+            activeFractal.maxIterations /= (1 + 0.5 * deltaTime);
+            activeFractal.framesToUpdate = 4;
         }
         DBOUT(mandelbrot.maxIterations << "\n");
     }
     if (upKey == true) {
-        mandelbrot.maxIterations = mandelbrot.maxIterations*(1 + 0.5 * frameTime) + 1;
-        DBOUT(mandelbrot.maxIterations << "\n");
+        activeFractal.maxIterations = activeFractal.maxIterations*(1 + 0.5 * deltaTime) + 1;
+        activeFractal.framesToUpdate = 4;
+        DBOUT(activeFractal.maxIterations << "\n");
     }
-    if (rightMouseButtonHeld) {
-        shouldUpdateJulia = true;
+    if (leftMouseButtonHeld && activeFractal.type == "mandelbrotSet") {
+        julia.framesToUpdate = 4;
         array<int, 2> newMouseState = { 0,0 };
         SDL_GetMouseState(&newMouseState[0], &newMouseState[1]);
-        if (newMouseState[0] <= mandelbrot.width && newMouseState[1] <= mandelbrot.height) {
+        if (newMouseState[0] <= mandelbrot.width + mandelbrotGap
+            && newMouseState[1] <= mandelbrot.height + mandelbrotGap
+            && newMouseState[0] >= mandelbrotGap
+            && newMouseState[1] >= mandelbrotGap) {
             mousePos = newMouseState;
         }
 
-        juliaIndex[0] = ((double)(mousePos[0] - mandelbrotGap) / mandelbrot.width - 0.5) * mandelbrot.zoom * ((double)mandelbrot.width / mandelbrot.height) + mandelbrot.position[0];
-        juliaIndex[1] = ((double)(mousePos[1] - mandelbrotGap) / mandelbrot.height - 0.5) * mandelbrot.zoom + mandelbrot.position[1];
+        julia.index[0] = ((double)(mousePos[0] - mandelbrotGap) / mandelbrot.width - 0.5) * mandelbrot.zoom * ((double)mandelbrot.width / mandelbrot.height) + mandelbrot.position[0];
+        julia.index[1] = ((double)(mousePos[1] - mandelbrotGap) / mandelbrot.height - 0.5) * mandelbrot.zoom + mandelbrot.position[1];
+
+        julia.position[0] = 0;
+        julia.position[1] = 0;
+        julia.zoom = 3;
     }
     return false;
 }
@@ -420,13 +636,22 @@ std::string loadKernelSource(const std::string& filename) {
     return buffer.str();
 }
 
+void swapFractalSizes(juliaSet &julia, mandelbrotSet &mandelbrot, cl_context context, cl_device_id device) {
+    array<int, 2> temp = { mandelbrot.width, mandelbrot.height };
+    mandelbrot.resize(julia.width, julia.height, renderer, window, context, device);
+    mandelbrot.rect = { mandelbrotGap, mandelbrotGap, mandelbrot.surface->w, mandelbrot.surface->h };
+    julia.resize(temp[0], temp[1], renderer, window, context, device);
+    julia.rect = { screenWidth - julia.width - mandelbrotGap, mandelbrotGap, julia.surface->w, julia.surface->h };
+    julia.framesToUpdate = 4;
+    mandelbrot.framesToUpdate = 4;
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
-    std::string kernelSource = loadKernelSource("Mandelbrot Kernel.cl");
-    std::string kernelSource2 = loadKernelSource("Julia Kernel.cl");
-    const char* sourceStr = kernelSource.c_str();
-    const char* sourceStr2 = kernelSource2.c_str();
-    //size_t sourceSize = kernelSource.size();
+    std::string mandelbrotKernelSource = loadKernelSource("Mandelbrot Kernel.cl");
+    std::string juliaKernelSource = loadKernelSource("Julia Kernel.cl");
+    const char* mandelbrotSourceStr = mandelbrotKernelSource.c_str();
+    const char* juliaSourceStr = juliaKernelSource.c_str();
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
@@ -438,6 +663,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (TTF_Init() == -1) {
         DBOUT("SDL_ttf could not initialize! TTF_Error: " << TTF_GetError() << std::endl);
         return 0;
+    }
+    SDL_DisplayMode DM;
+    if (SDL_GetDesktopDisplayMode(0, &DM) != 0) {
+        // Handle error
+        SDL_Log("SDL_GetDesktopDisplayMode failed: %s", SDL_GetError());
+        return 1;
+    }
+    if (screenWidth == 0) {
+        screenWidth = DM.w;
+    }
+    if (screenHeight == 0) {
+        screenHeight = DM.h;
+    }
+    if (frameRateCap == 0) {
+        frameRateCap = DM.refresh_rate;
     }
     if (fullscreen) {
         window = SDL_CreateWindow("Mandelbrot :)", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screenWidth, screenHeight, SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -453,6 +693,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
+    DBOUT(endl << endl << DM.format << endl << endl);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL)
     {
@@ -480,171 +721,123 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DBOUT("\n\ndevice: " << device << "\n\n");
     cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
 
-    TTF_Font* font = TTF_OpenFont("../Resources/Arial.ttf", 14);
-    SDL_Color textColor = { 255, 150, 0, 255 };
-
-    fractal mandelbrot(1400, 1000, renderer, window, context, device);
+    mandelbrotSet mandelbrot(screenWidth * 0.7, screenHeight - mandelbrotGap * 2, renderer, window, context, device);
     mandelbrot.position[0] = -0.7;
-    fractal julia(screenWidth - mandelbrot.width - mandelbrotGap*3, screenWidth - mandelbrot.width - mandelbrotGap * 3, renderer, window, context, device);
+    juliaSet julia(screenWidth - mandelbrot.width - mandelbrotGap*3, screenWidth - mandelbrot.width - mandelbrotGap * 3, renderer, window, context, device);
 
-    cl_program program = clCreateProgramWithSource(context, 1, &sourceStr, NULL, &err);
-    clBuildProgram(program, 1, &device, NULL, NULL, NULL);
-    cl_program program2 = clCreateProgramWithSource(context, 1, &sourceStr2, NULL, &err);
-    clBuildProgram(program2, 1, &device, NULL, NULL, NULL);
-
+    cl_program mandelbrotProgram = clCreateProgramWithSource(context, 1, &mandelbrotSourceStr, NULL, &err);
+    clBuildProgram(mandelbrotProgram, 1, &device, NULL, NULL, NULL);
+    cl_program juliaProgram = clCreateProgramWithSource(context, 1, &juliaSourceStr, NULL, &err);
+    clBuildProgram(juliaProgram, 1, &device, NULL, NULL, NULL);
 
     char* buildLog = new char[16384];
     size_t buildLogSize;
-    err = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, sizeof(buildLog), buildLog, &buildLogSize);
+    err = clGetProgramBuildInfo(mandelbrotProgram, device, CL_PROGRAM_BUILD_LOG, sizeof(buildLog), buildLog, &buildLogSize);
     if (err != CL_SUCCESS) {
         std::cerr << "\n\nError: Failed to retrieve build log!\n\n" << std::endl;
         exit(1);
     }
     DBOUT("\n\nmandelbrot build log:\n" << buildLog << "\n\n")
 
-    err = clGetProgramBuildInfo(program2, device, CL_PROGRAM_BUILD_LOG, sizeof(buildLog), buildLog, &buildLogSize);
+    err = clGetProgramBuildInfo(juliaProgram, device, CL_PROGRAM_BUILD_LOG, sizeof(buildLog), buildLog, &buildLogSize);
     if (err != CL_SUCCESS) {
         std::cerr << "\n\nError: Failed to retrieve build log!\n\n" << std::endl;
         exit(1);
     }
     DBOUT("\n\njulia build log:\n" << buildLog << "\n\n")
 
-    cl_kernel kernel = clCreateKernel(program, "mandelbrotKernel", &err);
-    cl_kernel kernel2 = clCreateKernel(program2, "juliaKernel", &err);
+    cl_kernel mandelbrotKernel = clCreateKernel(mandelbrotProgram, "mandelbrotKernel", &err);
+    cl_kernel juliaKernel = clCreateKernel(juliaProgram, "juliaKernel", &err);
+
+    SDL_Texture* backgroundTexture = SDL_CreateTextureFromSurface(renderer, SDL_LoadBMP("../Resources/background.bmp"));
 
     mandelbrot.rect = { mandelbrotGap, mandelbrotGap, mandelbrot.surface->w, mandelbrot.surface->h };
     julia.rect = { screenWidth - julia.width - mandelbrotGap, mandelbrotGap, julia.surface->w, julia.surface->h };
 
-    SDL_Texture* backgroundTexture = SDL_CreateTextureFromSurface(renderer, SDL_LoadBMP("../Resources/background.bmp"));
+    array<int, 2> mousePos = { 0, 0 };
+    string activeFractal = "mandelbrot";
+
+    text fpsText("FPS: ", 5, 0, 14);
+    fpsText.colour = { 255, 255, 255, 255 };
+    text mandelbrotIterationText("Mandelbrot iterations: ", 100, 0, 14);
+    mandelbrotIterationText.colour = { 255, 255, 255, 255 };
+    text juliaIterationText("Julia iterations: ", 300, 0, 14);
+    juliaIterationText.colour = { 255, 255, 255, 255 };
 
     // Main render loop
     bool quit = false;
     while (!quit)
     {
+        frameStart = std::chrono::high_resolution_clock::now();
+        SDL_GetMouseState(&mousePos[0], &mousePos[1]);
+
+        if (mousePos[0] >= mandelbrot.rect.x && mousePos[0] <= mandelbrot.width + mandelbrot.rect.x && mousePos[1] >= mandelbrot.rect.y && mousePos[1] <= mandelbrot.height + mandelbrot.rect.y && mandelbrot.width < julia.width) {
+            activeFractal = "mandelbrot";
+            swapFractalSizes(julia, mandelbrot, context, device);
+        }
+        if (mousePos[0] >= julia.rect.x && mousePos[0] <= julia.width + julia.rect.x && mousePos[1] >= julia.rect.y && mousePos[1] <= julia.height + julia.rect.y && julia.width < mandelbrot.width) {
+            activeFractal = "julia";
+            swapFractalSizes(julia, mandelbrot, context, device);
+        }
+
         if (timer - timerPoint > 1) {
             fps = (int)((double)(frameCounter - frameCounterPoint) / (timer - timerPoint));
             timerPoint = timer;
             frameCounterPoint = frameCounter;
         }
-        std::string fpsText = "FPS: " + std::to_string(fps);
-        SDL_Surface* fpsSurface = TTF_RenderText_Solid(font, fpsText.c_str(), textColor);
-        SDL_Texture* fpsTexture = SDL_CreateTextureFromSurface(renderer, fpsSurface);
-        SDL_Rect textRect = { 10, 10, fpsSurface->w, fpsSurface->h };
+        fpsText.setText("FPS: " + to_string(fps));
+        mandelbrotIterationText.setText("Mandelbrot iterations: " + to_string(mandelbrot.maxIterations));
+        juliaIterationText.setText("Julia iterations: " + to_string(julia.maxIterations));
 
-        frameStart = std::chrono::high_resolution_clock::now();
-        quit = handleInput(mandelbrot);
-
-        std::swap(mandelbrot.readPixelArr, mandelbrot.writePixelArr);
-        swapClMemObjects(mandelbrot.d_readPixelArr, mandelbrot.d_writePixelArr);
-
-        std::swap(julia.readPixelArr, julia.writePixelArr);
-        swapClMemObjects(julia.d_readPixelArr, julia.d_writePixelArr);
-
-        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &mandelbrot.d_writePixelArr);
-        err = clSetKernelArg(kernel, 1, sizeof(int), &(mandelbrot.width));
-        err = clSetKernelArg(kernel, 2, sizeof(int), &(mandelbrot.height));
-        err = clSetKernelArg(kernel, 3, sizeof(double), &mandelbrot.zoom);
-        err = clSetKernelArg(kernel, 4, sizeof(double), &mandelbrot.position[0]);
-        err = clSetKernelArg(kernel, 5, sizeof(double), &mandelbrot.position[1]);
-        err = clSetKernelArg(kernel, 6, sizeof(int), &mandelbrot.maxIterations);
-        err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &mandelbrot.d_workQueue);
-        err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &mandelbrot.d_globalIndex);
-        err = clSetKernelArg(kernel, 9, sizeof(int), &mandelbrot.colouringScheme);
-
-        julia.colouringScheme = mandelbrot.colouringScheme;
-        err = clSetKernelArg(kernel2, 0, sizeof(cl_mem), &julia.d_writePixelArr);
-        err = clSetKernelArg(kernel2, 1, sizeof(int), &(julia.width));
-        err = clSetKernelArg(kernel2, 2, sizeof(int), &(julia.height));
-        err = clSetKernelArg(kernel2, 3, sizeof(double), &julia.zoom);
-        err = clSetKernelArg(kernel2, 4, sizeof(double), &julia.position[0]);
-        err = clSetKernelArg(kernel2, 5, sizeof(double), &julia.position[1]);
-        err = clSetKernelArg(kernel2, 6, sizeof(int), &julia.maxIterations);
-        err = clSetKernelArg(kernel2, 7, sizeof(cl_mem), &julia.d_workQueue);
-        err = clSetKernelArg(kernel2, 8, sizeof(cl_mem), &julia.d_globalIndex);
-        err = clSetKernelArg(kernel2, 9, sizeof(int), &julia.colouringScheme);
-        err = clSetKernelArg(kernel2, 10, sizeof(double), &juliaIndex[0]);
-        err = clSetKernelArg(kernel2, 11, sizeof(double), &juliaIndex[1]);
-
-        profilingPoints[0] = std::chrono::high_resolution_clock::now();
-
-        err = clEnqueueWriteBuffer(mandelbrot.queue, mandelbrot.d_workQueue, CL_FALSE, 0, sizeof(int) * mandelbrot.width*mandelbrot.height, mandelbrot.workQueue, 0, NULL, NULL);
-        if (err != CL_SUCCESS) {
-            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-            exit(1);
+        if (activeFractal == "mandelbrot") {
+            quit = handleInput(mandelbrot, mandelbrot, julia);
         }
-        mandelbrot.globalIndex = 0;
-        err = clEnqueueWriteBuffer(mandelbrot.queue, mandelbrot.d_globalIndex, CL_FALSE, 0, sizeof(int), &mandelbrot.globalIndex, 0, NULL, NULL);
-        if (err != CL_SUCCESS) {
-            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-            exit(1);
+        else {
+            quit = handleInput(julia, mandelbrot, julia);
         }
 
-        // Transfer data from device to host
-        err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(int) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
+        if (mandelbrot.framesToUpdate > 0) {
+            std::swap(mandelbrot.readPixelArr, mandelbrot.writePixelArr);
+            swapClMemObjects(mandelbrot.d_readPixelArr, mandelbrot.d_writePixelArr);
 
-        uint32_t* pixels = (uint32_t*)mandelbrot.surface->pixels;
+            mandelbrot.setKernelArgs(mandelbrotKernel);
+            mandelbrot.writeBuffers();
+            // Transfer data from device to host
+            err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(int) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
 
-        // Execute the mandelbrot kernel
+            // Execute the mandelbrot kernel
+            clEnqueueNDRangeKernel(mandelbrot.queue, mandelbrotKernel, 1, NULL, &mandelbrot.globalWorkSize, NULL, 0, NULL, NULL);
 
-        clEnqueueNDRangeKernel(mandelbrot.queue, kernel, 1, NULL, &mandelbrot.globalWorkSize, NULL, 0, NULL, NULL);
+            mandelbrot.mapRGBReadPixelArr((uint32_t*)mandelbrot.surface->pixels);
 
-#pragma omp parallel for
-        for (int l = 0; l < mandelbrot.height; l++) {
-            for (int i = 0; i < mandelbrot.width; i++) {
-                pixels[l * mandelbrot.width + i] = SDL_MapRGB(mandelbrot.surface->format, 
-                    mandelbrot.readPixelArr[l * mandelbrot.width + i], 
-                    mandelbrot.readPixelArr[mandelbrot.width*mandelbrot.height + l * mandelbrot.width + i], 
-                    mandelbrot.readPixelArr[mandelbrot.width*mandelbrot.height * 2 + l * mandelbrot.width + i]);
-            }
+            clFinish(mandelbrot.queue);
+            
+            mandelbrot.framesToUpdate--;
         }
 
-        clFinish(mandelbrot.queue);
+        if (julia.framesToUpdate > 0) {
+            swap(julia.readPixelArr, julia.writePixelArr);
+            swapClMemObjects(julia.d_readPixelArr, julia.d_writePixelArr);
 
-        //execute the julia kernel
-
-        if (shouldUpdateJulia) {
-            err = clEnqueueWriteBuffer(julia.queue, julia.d_workQueue, CL_FALSE, 0, sizeof(int) * julia.width * julia.height, julia.workQueue, 0, NULL, NULL);
-            if (err != CL_SUCCESS) {
-                std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-                exit(1);
-            }
-            julia.globalIndex = 0;
-            err = clEnqueueWriteBuffer(julia.queue, julia.d_globalIndex, CL_FALSE, 0, sizeof(int), &julia.globalIndex, 0, NULL, NULL);
-            if (err != CL_SUCCESS) {
-                std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-                exit(1);
-            }
+            julia.colouringScheme = mandelbrot.colouringScheme;
+            julia.setKernelArgs(juliaKernel);
+            julia.writeBuffers();
 
             err = clEnqueueReadBuffer(julia.queue, julia.d_readPixelArr, CL_FALSE, 0, julia.width * julia.height * sizeof(int) * 3, julia.readPixelArr, 0, NULL, NULL);
 
-            uint32_t* pixels2 = (uint32_t*)julia.surface->pixels;
+            clEnqueueNDRangeKernel(julia.queue, juliaKernel, 1, NULL, &julia.globalWorkSize, NULL, 0, NULL, NULL);
 
-            clEnqueueNDRangeKernel(julia.queue, kernel2, 1, NULL, &julia.globalWorkSize, NULL, 0, NULL, NULL);
-
-#pragma omp parallel for
-            for (int l = 0; l < julia.width; l++) {
-                for (int i = 0; i < julia.width; i++) {
-                    pixels2[l * julia.width + i] = SDL_MapRGB(julia.surface->format,
-                        julia.readPixelArr[l * julia.width + i],
-                        julia.readPixelArr[julia.width * julia.height + l * julia.width + i],
-                        julia.readPixelArr[julia.width * julia.height * 2 + l * julia.width + i]);
-                }
-            }
+            julia.mapRGBReadPixelArr((uint32_t*)julia.surface->pixels);
 
             clFinish(julia.queue);
-            shouldUpdateJulia = false;
+
+            julia.framesToUpdate--;
         }
 
 
-        if (showPalette) {
-            for (int l = 0; l < mandelbrot.height; l++) {
-                for (int i = 0; i < mandelbrot.width; i++) {
-                    pixels[l * mandelbrot.width + i] = SDL_MapRGB(mandelbrot.surface->format, 
-                        palette((double)l / mandelbrot.width, 1)[0], 
-                        palette((double)l / mandelbrot.width, 1)[1], 
-                        palette((double)l / mandelbrot.width, 1)[2]);
-                }
-            }
+        frameStall += (1.0 / frameRateCap) - deltaTime;
+        if (frameStall > 0) {
+            SDL_Delay(frameStall * 1000);
         }
 
         //update screen
@@ -657,34 +850,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         SDL_RenderCopy(renderer, backgroundTexture, NULL, NULL);
         SDL_RenderCopy(renderer, mandelbrot.texture, NULL, &mandelbrot.rect);
         SDL_RenderCopy(renderer, julia.texture, NULL, &julia.rect);
-        SDL_RenderCopy(renderer, fpsTexture, nullptr, &textRect);
+        SDL_RenderCopy(renderer, fpsText.texture, nullptr, &fpsText.rect);
+        SDL_RenderCopy(renderer, mandelbrotIterationText.texture, nullptr, &mandelbrotIterationText.rect);
+        SDL_RenderCopy(renderer, juliaIterationText.texture, nullptr, &juliaIterationText.rect);
 
         SDL_RenderPresent(renderer);
 
-        profilingPoints[3] = std::chrono::high_resolution_clock::now();
-
-        SDL_FreeSurface(fpsSurface);
-        SDL_DestroyTexture(fpsTexture);
-
         frameCounter++;
-
-        int frameCountMean = 100;
-        double meanFrameTime;
-        frameTime = (long double)(chrono::duration_cast<chrono::microseconds>(profilingPoints[3] - profilingPoints[0]).count()) / 1000000;
-        for (int i = 0; i < profilingTimeMeans.size(); i++) {
-            profilingTimeMeans[i] += (long double)(chrono::duration_cast<chrono::microseconds>(profilingPoints[i + 1] - profilingPoints[i]).count()) / 1000000 / 100;
-        }
-        if (debugFrameTime && frameCounter % 100 == 0) {
-            meanFrameTime = profilingTimeMeans[0] + profilingTimeMeans[1] + profilingTimeMeans[2];
-            DBOUT(endl << "-total frame time: " << meanFrameTime << endl);
-            DBOUT("time spent iterating pixels on GPU while writing/reading buffers and getting image ready in parallel: " << profilingTimeMeans[0] << "(" << round((profilingTimeMeans[0] / meanFrameTime) * 100) << "%)" << endl);
-            //DBOUT("time spent collecting data from GPU: " << profilingTimeMeans[2] << "(" << round((profilingTimeMeans[2] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent in GPU alone: " << profilingTimeMeans[1] << "(" << round((profilingTimeMeans[1] / meanFrameTime) * 100) << "%)" << endl);
-            DBOUT("time spent displaying image: " << profilingTimeMeans[2] << "(" << round((profilingTimeMeans[2] / meanFrameTime) * 100) << "%)" << endl);
-            for (int i = 0; i < profilingTimeMeans.size(); i++) {
-                profilingTimeMeans[i] = 0;
-            }
-        }
         frameEnd = std::chrono::high_resolution_clock::now();
         deltaTime = (long double)(chrono::duration_cast<chrono::microseconds>(frameEnd - frameStart).count()) / 1000000;
         timer += deltaTime;
@@ -694,10 +866,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     delete[] platforms;
     delete[] buildLog;
 
-    clReleaseKernel(kernel);
-    clReleaseKernel(kernel2);
-    clReleaseProgram(program);
-    clReleaseProgram(program2);
+    clReleaseKernel(mandelbrotKernel);
+    clReleaseKernel(juliaKernel);
+    clReleaseProgram(mandelbrotProgram);
+    clReleaseProgram(juliaProgram);
 
     clReleaseContext(context);
 
@@ -706,8 +878,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     TTF_Quit();
     SDL_Quit();
-
-    TTF_CloseFont(font);
 
     return 0;
 }
