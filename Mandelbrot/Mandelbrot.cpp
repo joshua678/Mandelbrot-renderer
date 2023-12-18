@@ -44,6 +44,7 @@ double timer = 0;
 double timerPoint = 0;
 int frameCounterPoint = 0;
 double frameStall = 0;
+cl_int err;
 
 #define DBOUT( s )            \
 {                             \
@@ -64,11 +65,11 @@ public:
     long double zoomSpeed = 0.4;
     int colouringScheme = 0;
 
-    string type;
+    string type = "fractal";
     SDL_Surface* surface = NULL;
     SDL_Texture* texture = NULL;
-    int* writePixelArr;
-    int* readPixelArr;
+    uint32_t* writePixelArr;
+    uint32_t* readPixelArr;
     int width;
     int height;
     SDL_Rect rect;
@@ -84,13 +85,11 @@ public:
     cl_mem d_globalIndex;
     int framesToUpdate = 0;
 
-    fractal(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) {
-        type = "fractal";
-        cl_int err;
-        width = newWidth;
-        height = newHeight;
-        writePixelArr = new int[width * height * 3];
-        readPixelArr = new int[width * height * 3];
+    fractal(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) 
+        : width(newWidth), height(newHeight) {
+
+        writePixelArr = new uint32_t[width * height * 3];
+        readPixelArr = new uint32_t[width * height * 3];
         workQueue = new int[width * height];
 
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
@@ -129,11 +128,11 @@ public:
 
         queueProperties = 0;
         queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(int) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(int) * 3, NULL, &err);
+        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
+        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
 
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, writePixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
 
         for (int i = 0; i < width * height; ++i) {
             workQueue[i] = i;
@@ -191,7 +190,7 @@ public:
     }
 
     void writeBuffers() {
-        cl_int err;
+        
         err = clEnqueueWriteBuffer(queue, d_workQueue, CL_FALSE, 0, sizeof(int) * width * height, workQueue, 0, NULL, NULL);
         if (err != CL_SUCCESS) {
             std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
@@ -236,11 +235,11 @@ public:
             SDL_FreeSurface(surface);
         }
 
-        cl_int err;
+        
         width = newWidth;
         height = newHeight;
-        writePixelArr = new int[width * height * 3];
-        readPixelArr = new int[width * height * 3];
+        writePixelArr = new uint32_t[width * height * 3];
+        readPixelArr = new uint32_t[width * height * 3];
         workQueue = new int[width * height];
 
         surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
@@ -267,11 +266,11 @@ public:
 
         queueProperties = 0;
         queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(int) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(int) * 3, NULL, &err);
+        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
+        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
 
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(int) * 3, writePixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
 
         for (int i = 0; i < width * height; ++i) {
             workQueue[i] = i;
@@ -292,7 +291,7 @@ struct mandelbrotSet : fractal {
         framesToUpdate = 4;
     }
     void setKernelArgs(cl_kernel& kernel) {
-        cl_int err;
+        
         err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
         err = clSetKernelArg(kernel, 1, sizeof(int), &width);
         err = clSetKernelArg(kernel, 2, sizeof(int), &height);
@@ -313,7 +312,7 @@ struct juliaSet : fractal {
         type = "juliaSet";
     }
     void setKernelArgs(cl_kernel &kernel) {
-        cl_int err;
+        
         err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
         err = clSetKernelArg(kernel, 1, sizeof(int), &(width));
         err = clSetKernelArg(kernel, 2, sizeof(int), &(height));
@@ -338,10 +337,8 @@ struct text {
     SDL_Rect rect;
     int x, y;
 
-    text(string newText, int newX, int newY, int newSize) {
-        textStr = newText;
-        x = newX;
-        y = newY;
+    text(string newText, int newX, int newY, int newSize)
+    : textStr(newText), x(newX), y(newY) {
         font = TTF_OpenFont("../Resources/Arial.ttf", newSize);
         surface = TTF_RenderText_Solid(font, textStr.c_str(), colour);
         texture = SDL_CreateTextureFromSurface(renderer, surface);
@@ -803,7 +800,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             mandelbrot.setKernelArgs(mandelbrotKernel);
             mandelbrot.writeBuffers();
             // Transfer data from device to host
-            err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(int) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
+            err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(uint32_t) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
 
             // Execute the mandelbrot kernel
             clEnqueueNDRangeKernel(mandelbrot.queue, mandelbrotKernel, 1, NULL, &mandelbrot.globalWorkSize, NULL, 0, NULL, NULL);
@@ -823,7 +820,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             julia.setKernelArgs(juliaKernel);
             julia.writeBuffers();
 
-            err = clEnqueueReadBuffer(julia.queue, julia.d_readPixelArr, CL_FALSE, 0, julia.width * julia.height * sizeof(int) * 3, julia.readPixelArr, 0, NULL, NULL);
+            err = clEnqueueReadBuffer(julia.queue, julia.d_readPixelArr, CL_FALSE, 0, julia.width * julia.height * sizeof(uint32_t) * 3, julia.readPixelArr, 0, NULL, NULL);
 
             clEnqueueNDRangeKernel(julia.queue, juliaKernel, 1, NULL, &julia.globalWorkSize, NULL, 0, NULL, NULL);
 
