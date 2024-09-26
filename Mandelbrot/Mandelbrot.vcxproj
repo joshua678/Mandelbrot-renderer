@@ -155,6 +155,9 @@
     <None Include="Julia Kernel.cl" />
     <None Include="Mandelbrot Kernel.cl" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="fractals.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

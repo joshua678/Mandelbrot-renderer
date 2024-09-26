@@ -11,6 +11,7 @@
 #include <omp.h>
 #include <fstream>
 #include <SDL/SDL_ttf.h>
+#include "fractals.h"
 
 #define MAX_SOURCE_SIZE (0x100000)
 
@@ -37,6 +38,8 @@ array<int, 2> mousePos = { 0, 0 };
 
 std::chrono::time_point<std::chrono::high_resolution_clock> frameStart;
 std::chrono::time_point<std::chrono::high_resolution_clock> frameEnd;
+std::chrono::time_point<std::chrono::high_resolution_clock> p1;
+std::chrono::time_point<std::chrono::high_resolution_clock> p2;
 double deltaTime = 1;
 int frameCounter = 0;
 int fps = 0;
@@ -44,289 +47,6 @@ double timer = 0;
 double timerPoint = 0;
 int frameCounterPoint = 0;
 double frameStall = 0;
-cl_int err;
-
-#define DBOUT( s )            \
-{                             \
-   std::wostringstream os_;    \
-   os_ << s;                   \
-   OutputDebugStringW( os_.str().c_str() );  \
-}
-
-struct fractal {
-private:
-    Uint32 rmask, gmask, bmask, amask;
-public:
-    int maxIterations = 1024;
-    int maxIterationsFloor = 10;
-    long double position[2] = { 0,0 }; //view centre in the plane
-    double zoom = 3;
-    long double moveSpeed = 0.15;
-    long double zoomSpeed = 0.4;
-    int colouringScheme = 0;
-
-    string type = "fractal";
-    SDL_Surface* surface = NULL;
-    SDL_Texture* texture = NULL;
-    uint32_t* writePixelArr;
-    uint32_t* readPixelArr;
-    int width;
-    int height;
-    SDL_Rect rect;
-    cl_queue_properties queueProperties = 0;
-    cl_command_queue queue;
-    cl_mem d_readPixelArr;
-    cl_mem d_writePixelArr;
-    size_t globalWorkSize = 6400;
-    size_t localWorkSize = NULL;
-    int* workQueue;
-    cl_mem d_workQueue;
-    int globalIndex = 0;
-    cl_mem d_globalIndex;
-    int framesToUpdate = 0;
-
-    fractal(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) 
-        : width(newWidth), height(newHeight) {
-
-        writePixelArr = new uint32_t[width * height * 3];
-        readPixelArr = new uint32_t[width * height * 3];
-        workQueue = new int[width * height];
-
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-        rmask = 0xff000000;
-        gmask = 0x00ff0000;
-        bmask = 0x0000ff000;
-        amask = 0x000000ff;
-#else // SDL_BYTEORDER == SDL_LIL_ENDIAN
-        rmask = 0x000000ff;
-        gmask = 0x0000ff00;
-        bmask = 0x00ff0000;
-        amask = 0xff000000;
-#endif
-
-        surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
-        if (surface == NULL)
-        {
-            printf("Surface could not be created! SDL_Error: %s\n", SDL_GetError());
-
-            SDL_FreeSurface(surface);
-            SDL_DestroyRenderer(renderer);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-        texture = SDL_CreateTextureFromSurface(renderer, surface);
-        if (texture == NULL)
-        {
-            printf("Texture could not be created! SDL_Error: %s\n", SDL_GetError());
-
-            SDL_DestroyTexture(texture);
-            SDL_FreeSurface(surface);
-            SDL_DestroyRenderer(renderer);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-
-        queueProperties = 0;
-        queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
-
-        for (int i = 0; i < width * height; ++i) {
-            workQueue[i] = i;
-        }
-
-        globalWorkSize = 6400;
-        localWorkSize = NULL;
-        d_workQueue = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * width * height, workQueue, &err);
-        globalIndex = 0;
-        d_globalIndex = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int), &globalIndex, &err);
-    }
-
-    ~fractal() {
-        // Release OpenCL resources
-        if (queue) {
-            clReleaseCommandQueue(queue);
-        }
-        if (d_readPixelArr) {
-            clReleaseMemObject(d_readPixelArr);
-        }
-        if (d_writePixelArr) {
-            clReleaseMemObject(d_writePixelArr);
-        }
-        if (d_workQueue) {
-            clReleaseMemObject(d_workQueue);
-        }
-        if (d_globalIndex) {
-            clReleaseMemObject(d_globalIndex);
-        }
-
-        // Release dynamically allocated arrays
-        delete[] writePixelArr;
-        delete[] readPixelArr;
-        delete[] workQueue;
-
-        // Release SDL resources
-        if (texture) {
-            SDL_DestroyTexture(texture);
-        }
-        if (surface) {
-            SDL_FreeSurface(surface);
-        }
-    }
-
-    void mapRGBReadPixelArr(uint32_t* pixelsToSet) {
-#pragma omp parallel for
-        for (int l = 0; l < height; l++) {
-            for (int i = 0; i < width; i++) {
-                pixelsToSet[l * width + i] = SDL_MapRGB(surface->format,
-                    readPixelArr[l * width + i],
-                    readPixelArr[width * height + l * width + i],
-                    readPixelArr[width * height * 2 + l * width + i]);
-            }
-        }
-    }
-
-    void writeBuffers() {
-        
-        err = clEnqueueWriteBuffer(queue, d_workQueue, CL_FALSE, 0, sizeof(int) * width * height, workQueue, 0, NULL, NULL);
-        if (err != CL_SUCCESS) {
-            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-            exit(1);
-        }
-        globalIndex = 0;
-        err = clEnqueueWriteBuffer(queue, d_globalIndex, CL_FALSE, 0, sizeof(int), &globalIndex, 0, NULL, NULL);
-        if (err != CL_SUCCESS) {
-            std::cerr << "\n\nError: Failed to write buffer!\n\n" << std::endl;
-            exit(1);
-        }
-    }
-
-    void resize(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device) {
-        // Release OpenCL resources
-        if (queue) {
-            clReleaseCommandQueue(queue);
-        }
-        if (d_readPixelArr) {
-            clReleaseMemObject(d_readPixelArr);
-        }
-        if (d_writePixelArr) {
-            clReleaseMemObject(d_writePixelArr);
-        }
-        if (d_workQueue) {
-            clReleaseMemObject(d_workQueue);
-        }
-        if (d_globalIndex) {
-            clReleaseMemObject(d_globalIndex);
-        }
-
-        // Release dynamically allocated arrays
-        delete[] writePixelArr;
-        delete[] readPixelArr;
-        delete[] workQueue;
-
-        // Release SDL resources
-        if (texture) {
-            SDL_DestroyTexture(texture);
-        }
-        if (surface) {
-            SDL_FreeSurface(surface);
-        }
-
-        
-        width = newWidth;
-        height = newHeight;
-        writePixelArr = new uint32_t[width * height * 3];
-        readPixelArr = new uint32_t[width * height * 3];
-        workQueue = new int[width * height];
-
-        surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
-        if (surface == NULL)
-        {
-            printf("Surface could not be created! SDL_Error: %s\n", SDL_GetError());
-
-            SDL_FreeSurface(surface);
-            SDL_DestroyRenderer(renderer);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-        texture = SDL_CreateTextureFromSurface(renderer, surface);
-        if (texture == NULL)
-        {
-            printf("Texture could not be created! SDL_Error: %s\n", SDL_GetError());
-
-            SDL_DestroyTexture(texture);
-            SDL_FreeSurface(surface);
-            SDL_DestroyRenderer(renderer);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-
-        queueProperties = 0;
-        queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
-
-        for (int i = 0; i < width * height; ++i) {
-            workQueue[i] = i;
-        }
-
-        globalWorkSize = 6400;
-        localWorkSize = NULL;
-        d_workQueue = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * width * height, workQueue, &err);
-        globalIndex = 0;
-        d_globalIndex = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int), &globalIndex, &err);
-    }
-};
-
-struct mandelbrotSet : fractal {
-    mandelbrotSet(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device)
-        : fractal(newWidth, newHeight, renderer, window, context, device) {
-        type = "mandelbrotSet";
-        framesToUpdate = 4;
-    }
-    void setKernelArgs(cl_kernel& kernel) {
-        
-        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
-        err = clSetKernelArg(kernel, 1, sizeof(int), &width);
-        err = clSetKernelArg(kernel, 2, sizeof(int), &height);
-        err = clSetKernelArg(kernel, 3, sizeof(double), &zoom);
-        err = clSetKernelArg(kernel, 4, sizeof(double), &position[0]);
-        err = clSetKernelArg(kernel, 5, sizeof(double), &position[1]);
-        err = clSetKernelArg(kernel, 6, sizeof(int), &maxIterations);
-        err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
-        err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
-        err = clSetKernelArg(kernel, 9, sizeof(int), &colouringScheme);
-    }
-};
-
-struct juliaSet : fractal {
-    array<double, 2> index = { 0, 0 };
-    juliaSet(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device)
-        : fractal(newWidth, newHeight, renderer, window, context, device) {
-        type = "juliaSet";
-    }
-    void setKernelArgs(cl_kernel &kernel) {
-        
-        err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_writePixelArr);
-        err = clSetKernelArg(kernel, 1, sizeof(int), &(width));
-        err = clSetKernelArg(kernel, 2, sizeof(int), &(height));
-        err = clSetKernelArg(kernel, 3, sizeof(double), &zoom);
-        err = clSetKernelArg(kernel, 4, sizeof(double), &position[0]);
-        err = clSetKernelArg(kernel, 5, sizeof(double), &position[1]);
-        err = clSetKernelArg(kernel, 6, sizeof(int), &maxIterations);
-        err = clSetKernelArg(kernel, 7, sizeof(cl_mem), &d_workQueue);
-        err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &d_globalIndex);
-        err = clSetKernelArg(kernel, 9, sizeof(int), &colouringScheme);
-        err = clSetKernelArg(kernel, 10, sizeof(double), &index[0]);
-        err = clSetKernelArg(kernel, 11, sizeof(double), &index[1]);
-    }
-};
 
 struct text {
     TTF_Font* font;
@@ -339,7 +59,7 @@ struct text {
 
     text(string newText, int newX, int newY, int newSize)
     : textStr(newText), x(newX), y(newY) {
-        font = TTF_OpenFont("../Resources/Arial.ttf", newSize);
+        font = TTF_OpenFont("Resources/Arial.ttf", newSize);
         surface = TTF_RenderText_Solid(font, textStr.c_str(), colour);
         texture = SDL_CreateTextureFromSurface(renderer, surface);
         rect = { x, y, surface->w, surface->h };
@@ -702,29 +422,150 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         return 0;
     }
-    cl_device_id* devices = new cl_device_id[1];
-    cl_uint num_devices;
-    cl_platform_id* platforms;
-    cl_uint num_platforms;
-    clGetPlatformIDs(0, NULL, &num_platforms);
-    platforms = new cl_platform_id[num_platforms];
-    clGetPlatformIDs(num_platforms, platforms, NULL);
-    cl_int err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 1, &devices[0], &num_devices);
-    if (err != CL_SUCCESS) {
-        std::cerr << "Error: Failed to retrieve device IDs!" << std::endl;
+
+
+
+
+    //cl_device_id* devices = new cl_device_id[1];
+    //cl_uint num_devices;
+    //cl_platform_id* platforms;
+    //cl_uint num_platforms;
+    //clGetPlatformIDs(0, NULL, &num_platforms);
+    //platforms = new cl_platform_id[num_platforms];
+    //clGetPlatformIDs(num_platforms, platforms, NULL);
+    //cl_int err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 1, &devices[0], &num_devices);
+    //if (err != CL_SUCCESS) {
+    //    std::cerr << "Error: Failed to retrieve device IDs!" << std::endl;
+    //    exit(1);
+    //}
+    //cl_device_id device = devices[0];
+
+
+
+
+    
+
+
+
+    // OpenCL initialization with platform and device selection
+    cl_int err;
+    cl_uint num_platforms = 0;
+    err = clGetPlatformIDs(0, NULL, &num_platforms);
+    if (err != CL_SUCCESS || num_platforms == 0) {
+        std::cerr << "Error: Failed to find any OpenCL platforms!" << std::endl;
         exit(1);
     }
+
+    cl_platform_id* platforms = new cl_platform_id[num_platforms];
+    err = clGetPlatformIDs(num_platforms, platforms, NULL);
+    if (err != CL_SUCCESS) {
+        std::cerr << "Error: Failed to get OpenCL platform IDs!" << std::endl;
+        exit(1);
+    }
+
+    // Select the NVIDIA platform
+    cl_platform_id selectedPlatform = NULL;
+    char platformName[128];
+    for (cl_uint i = 0; i < num_platforms; ++i) {
+        err = clGetPlatformInfo(platforms[i], CL_PLATFORM_NAME, sizeof(platformName), platformName, NULL);
+        if (err != CL_SUCCESS) {
+            std::cerr << "Error: Failed to get platform name!" << std::endl;
+            exit(1);
+        }
+        // Uncomment the following line to see all platform names
+        // std::cout << "Platform " << i << ": " << platformName << std::endl;
+        if (strstr(platformName, "NVIDIA") != NULL) {
+            selectedPlatform = platforms[i];
+            break;
+        }
+    }
+    if (selectedPlatform == NULL) {
+        std::cerr << "Error: NVIDIA OpenCL platform not found!" << std::endl;
+        exit(1);
+    }
+
+    // Get devices from the selected platform
+    cl_uint num_devices = 0;
+    err = clGetDeviceIDs(selectedPlatform, CL_DEVICE_TYPE_GPU, 0, NULL, &num_devices);
+    if (err != CL_SUCCESS || num_devices == 0) {
+        std::cerr << "Error: Failed to find GPU devices on the NVIDIA platform!" << std::endl;
+        exit(1);
+    }
+
+    cl_device_id* devices = new cl_device_id[num_devices];
+    err = clGetDeviceIDs(selectedPlatform, CL_DEVICE_TYPE_GPU, num_devices, devices, NULL);
+    if (err != CL_SUCCESS) {
+        DBOUT("Error: Failed to get device IDs from the NVIDIA platform!" << std::endl)
+        exit(1);
+    }
+
     cl_device_id device = devices[0];
-    DBOUT("\n\ndevice: " << device << "\n\n");
+
+    // Optionally, print the device name
+    char deviceName[128];
+    err = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(deviceName), deviceName, NULL);
+    if (err != CL_SUCCESS) {
+        DBOUT("Error: Failed to get device name!" << std::endl)
+        exit(1);
+    }
+    DBOUT("Using device: " << deviceName << std::endl)
+
+
+
+
+
+
+
+
+
+
     cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
 
     mandelbrotSet mandelbrot(screenWidth * 0.7, screenHeight - mandelbrotGap * 2, renderer, window, context, device);
     mandelbrot.position[0] = -0.7;
-    juliaSet julia(screenWidth - mandelbrot.width - mandelbrotGap*3, screenWidth - mandelbrot.width - mandelbrotGap * 3, renderer, window, context, device);
+    juliaSet julia(screenWidth - mandelbrot.width - mandelbrotGap * 3, screenWidth - mandelbrot.width - mandelbrotGap * 3, renderer, window, context, device);
 
     cl_program mandelbrotProgram = clCreateProgramWithSource(context, 1, &mandelbrotSourceStr, NULL, &err);
+
+    if (err != CL_SUCCESS) {
+        DBOUT("Error: Failed to create Mandelbrot OpenCL program! " << getErrorString(err) << std::endl)
+        exit(1);
+    }
+
+    err = clBuildProgram(mandelbrotProgram, 1, &device, NULL, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        // Get the build log
+        size_t logSize;
+        clGetProgramBuildInfo(mandelbrotProgram, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &logSize);
+        char* buildLog = new char[logSize + 1];
+        clGetProgramBuildInfo(mandelbrotProgram, device, CL_PROGRAM_BUILD_LOG, logSize, buildLog, NULL);
+        buildLog[logSize] = '\0';
+        DBOUT("Error in Mandelbrot kernel:\n" << buildLog << std::endl)
+        delete[] buildLog;
+        exit(1);
+    }
+
     clBuildProgram(mandelbrotProgram, 1, &device, NULL, NULL, NULL);
+
     cl_program juliaProgram = clCreateProgramWithSource(context, 1, &juliaSourceStr, NULL, &err);
+    if (err != CL_SUCCESS) {
+        DBOUT("Error: Failed to create Julia OpenCL program! " << getErrorString(err) << std::endl)
+        exit(1);
+    }
+
+    err = clBuildProgram(juliaProgram, 1, &device, NULL, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        // Get the build log
+        size_t logSize;
+        clGetProgramBuildInfo(juliaProgram, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &logSize);
+        char* buildLog = new char[logSize + 1];
+        clGetProgramBuildInfo(juliaProgram, device, CL_PROGRAM_BUILD_LOG, logSize, buildLog, NULL);
+        buildLog[logSize] = '\0';
+        DBOUT("Error in Julia kernel:\n" << buildLog << std::endl)
+        delete[] buildLog;
+        exit(1);
+    }
+
     clBuildProgram(juliaProgram, 1, &device, NULL, NULL, NULL);
 
     char* buildLog = new char[16384];
@@ -746,7 +587,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     cl_kernel mandelbrotKernel = clCreateKernel(mandelbrotProgram, "mandelbrotKernel", &err);
     cl_kernel juliaKernel = clCreateKernel(juliaProgram, "juliaKernel", &err);
 
-    SDL_Texture* backgroundTexture = SDL_CreateTextureFromSurface(renderer, SDL_LoadBMP("../Resources/background.bmp"));
+    SDL_Texture* backgroundTexture = SDL_CreateTextureFromSurface(renderer, SDL_LoadBMP("Resources/background.bmp"));
 
     mandelbrot.rect = { mandelbrotGap, mandelbrotGap, mandelbrot.surface->w, mandelbrot.surface->h };
     julia.rect = { screenWidth - julia.width - mandelbrotGap, mandelbrotGap, julia.surface->w, julia.surface->h };
@@ -760,6 +601,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     mandelbrotIterationText.colour = { 255, 255, 255, 255 };
     text juliaIterationText("Julia iterations: ", 300, 0, 14);
     juliaIterationText.colour = { 255, 255, 255, 255 };
+
+
+
+
+
+    /*vector<grid> pointBatches100k;
+    vector<grid> pointBatches1m;
+
+    DBOUT("generating points...");
+    p1 = std::chrono::high_resolution_clock::now();
+    pointBatches1m.push_back(generatePoints(mandelbrot, sqrt(2)));
+    p2 = std::chrono::high_resolution_clock::now();
+
+    long double thing = (long double)(chrono::duration_cast<chrono::microseconds>(p2 - p1).count()) / 1000000;
+    DBOUT("generated points in " << thing << "s" << endl);*/
+
+
+
 
     // Main render loop
     bool quit = false;
@@ -797,17 +656,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             std::swap(mandelbrot.readPixelArr, mandelbrot.writePixelArr);
             swapClMemObjects(mandelbrot.d_readPixelArr, mandelbrot.d_writePixelArr);
 
+            //vector<array<double, 2>> points = pointBatches1m[0].samples;
             mandelbrot.setKernelArgs(mandelbrotKernel);
             mandelbrot.writeBuffers();
+
             // Transfer data from device to host
             err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(uint32_t) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
 
             // Execute the mandelbrot kernel
             clEnqueueNDRangeKernel(mandelbrot.queue, mandelbrotKernel, 1, NULL, &mandelbrot.globalWorkSize, NULL, 0, NULL, NULL);
 
-            mandelbrot.mapRGBReadPixelArr((uint32_t*)mandelbrot.surface->pixels);
-
             clFinish(mandelbrot.queue);
+
+            //createPoints(1, mandelbrot, pointBatches1m[0]);
+
+            mandelbrot.mapRGBReadPixelArr((uint32_t*)mandelbrot.surface->pixels);
             
             mandelbrot.framesToUpdate--;
         }
