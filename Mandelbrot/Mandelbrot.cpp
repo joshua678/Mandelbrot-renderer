@@ -447,7 +447,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 
 
-    // OpenCL initialization with platform and device selection
+// OpenCL initialization with platform and device selection
     cl_int err;
     cl_uint num_platforms = 0;
     err = clGetPlatformIDs(0, NULL, &num_platforms);
@@ -463,7 +463,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         exit(1);
     }
 
-    // Select the NVIDIA platform
+    // Select the first available platform (AMD, NVIDIA, etc.)
     cl_platform_id selectedPlatform = NULL;
     char platformName[128];
     for (cl_uint i = 0; i < num_platforms; ++i) {
@@ -474,13 +474,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         // Uncomment the following line to see all platform names
         // std::cout << "Platform " << i << ": " << platformName << std::endl;
-        if (strstr(platformName, "NVIDIA") != NULL) {
-            selectedPlatform = platforms[i];
-            break;
-        }
+
+        // You could optionally check for specific platforms (NVIDIA, AMD, etc.)
+        // For example, to check for AMD: if (strstr(platformName, "AMD") != NULL)
+        selectedPlatform = platforms[i]; // Pick the first available platform (or add custom logic here)
+        break;
     }
+
     if (selectedPlatform == NULL) {
-        std::cerr << "Error: NVIDIA OpenCL platform not found!" << std::endl;
+        std::cerr << "Error: No suitable OpenCL platform found!" << std::endl;
         exit(1);
     }
 
@@ -488,14 +490,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     cl_uint num_devices = 0;
     err = clGetDeviceIDs(selectedPlatform, CL_DEVICE_TYPE_GPU, 0, NULL, &num_devices);
     if (err != CL_SUCCESS || num_devices == 0) {
-        std::cerr << "Error: Failed to find GPU devices on the NVIDIA platform!" << std::endl;
+        std::cerr << "Error: Failed to find GPU devices on the selected platform!" << std::endl;
         exit(1);
     }
 
     cl_device_id* devices = new cl_device_id[num_devices];
     err = clGetDeviceIDs(selectedPlatform, CL_DEVICE_TYPE_GPU, num_devices, devices, NULL);
     if (err != CL_SUCCESS) {
-        DBOUT("Error: Failed to get device IDs from the NVIDIA platform!" << std::endl)
+        std::cerr << "Error: Failed to get device IDs from the selected platform!" << std::endl;
         exit(1);
     }
 
@@ -505,10 +507,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     char deviceName[128];
     err = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(deviceName), deviceName, NULL);
     if (err != CL_SUCCESS) {
-        DBOUT("Error: Failed to get device name!" << std::endl)
+        std::cerr << "Error: Failed to get device name!" << std::endl;
         exit(1);
     }
-    DBOUT("Using device: " << deviceName << std::endl)
+    std::cout << "Using device: " << deviceName << std::endl;
 
 
 
