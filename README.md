@@ -6,10 +6,11 @@ This project is a real-time renderer for the Mandelbrot and Julia sets, implemen
 
 - **Real-Time Rendering**: Leverages OpenCL for parallel computation on the GPU, enabling high-performance rendering.
 - **Interactive Exploration**: Navigate the fractals using keyboard controls for zooming and panning.
-- **Dynamic Julia Set**: The Julia set updates in real-time by indexing the Mandelbrot set, based on the mouse position over the Mandelbrot set.
+- **Dynamic Julia Set**: The Julia set updates in real-time by indexing the Mandelbrot set at the position of your cursor.
 - **Dual Display**: Renders both the Mandelbrot set and its corresponding Julia set side by side.
 - **Adjustable Parameters**: Modify iteration counts and coloring schemes on the fly.
 - **High Resolution Support**: Automatically adapts to native screen resolutions, with fullscreen mode available.
+- **Multiple Colouring Schemes**: There are two colouring schemes, a "rainbow" colouring scheme and a "3D" colouring scheme, which can be switched in real time.
 
 ## Technologies Used
 
@@ -25,12 +26,12 @@ This project is a real-time renderer for the Mandelbrot and Julia sets, implemen
   - ```W``` / ```A``` / ```S``` / ```D```: Pan up, left, down, and right.
   - ```Q```: Zoom in.
   - ```E```: Zoom out.
-  - ```Left Shift```: Increase movement and zoom speed.
+  - ```Left Shift```: Increase movement and zoom speed while held.
 - **Iteration Control**:
   - ```Up Arrow```: Increase maximum iterations.
   - ```Down Arrow```: Decrease maximum iterations.
 - **Mouse Interaction**:
-  - ```Left Click```: Update the Julia set by clicking on the Mandelbrot set.
+  - ```Left Click```: Update the Julia set by clicking on the Mandelbrot set (preferably while zoomed out on the mandelbrot set).
 - **Color Scheme**:
   - ```Spacebar```: Toggle between different coloring schemes.
 
@@ -53,7 +54,7 @@ For users who prefer not to compile the source code, a pre-built executable is a
 3. **Run the Application**
 
    - Open the extracted ```release``` folder.
-   - Double-click on ```mandelbrot_renderer.exe``` to run the application.
+   - Double-click on ```Mandelbrot.exe``` to run the application.
 
    **Note**: Ensure that all files in the release folder remain together, as the executable depends on accompanying resources like DLLs, fonts, and images.
 
@@ -64,56 +65,29 @@ If you prefer to compile and run the application from source, follow the instruc
 #### Prerequisites
 
 - **OpenCL SDK**: Ensure your GPU drivers support OpenCL and the SDK is installed.
-- **SDL2 Libraries**: Install SDL2 and SDL2_ttf.
 - **C++ Compiler**: Compatible with C++11 or higher.
 
 ### Building on Windows (Using Visual Studio)
 
 1. **Clone the Repository**:
    ```
-   git clone https://github.com/yourusername/mandelbrot-renderer.git
+   git clone https://github.com/Joshua678/mandelbrot-renderer.git
    ```
-2. **Open the Project**: Load the ```.sln``` file in Visual Studio.
-3. **Configure Include Directories**:
-   - Add OpenCL and SDL2 include directories to the project settings.
-4. **Configure Library Directories**:
-   - Link against ```OpenCL.lib```, ```SDL2.lib```, and ```SDL2_ttf.lib```.
-5. **Build the Solution**: Compile the project in Release mode for optimal performance.
-
-### Building on Linux
-
-1. **Install Dependencies**:
-   ```
-   sudo apt-get install build-essential ocl-icd-opencl-dev libsdl2-dev libsdl2-ttf-dev
-   ```
-2. **Clone the Repository**:
-   ```
-   git clone https://github.com/yourusername/mandelbrot-renderer.git
-   ```
-3. **Compile the Code**:
-   ```
-   g++ -std=c++11 main.cpp -lOpenCL -lSDL2 -lSDL2_ttf -o mandelbrot_renderer
-   ```
-   - Adjust include paths if necessary.
-
-### Running the Application from Terminal (Linux)
-
-- **Execute the Binary**:
-  ```
-  ./mandelbrot_renderer
-  ```
-- **Note**: The application starts in fullscreen mode by default. Modify the ```fullscreen``` variable in ```main.cpp``` to change this behavior.
+2. **Open the Project**: Load the `.sln` file in Visual Studio.
+3. **Build the Solution**: Simply build the project. All necessary include directories and libraries are configured using relative paths.
 
 ## Screenshots
 
 ### Mandelbrot Set
 
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot%20image.PNG)
-![Mandelbrot Set Screenshot](Example%20images/3D%20Mandelbrot%20image.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot1.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot2.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot3.PNG)
 
 ### Julia Set
 
-![Mandelbrot Set Screenshot](Example%20images/Julia%20set%20image.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot4.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot5.PNG)
 
 ## Project Structure
 
@@ -127,7 +101,6 @@ If you prefer to compile and run the application from source, follow the instruc
 
 - **Resolution and Fullscreen**: Modify ```screenWidth```, ```screenHeight```, and ```fullscreen``` variables at the top of ```main.cpp```.
 - **Frame Rate Cap**: Adjust ```frameRateCap``` to limit the maximum FPS.
-- **Iteration Limits**: Change ```maxIterations``` and ```maxIterationsFloor``` in the fractal classes to control detail levels.
 
 ## Notes
 
@@ -137,10 +110,11 @@ If you prefer to compile and run the application from source, follow the instruc
 
 ## Future Improvements
 
-- **Cross-Platform Support**: Enhance compatibility with macOS and Linux.
+- **Cross-Platform Support**: Improve compatibility with macOS and Linux.
 - **User Interface**: Add a graphical menu for adjusting settings.
-- **Additional Fractals**: Implement support for other fractal types like the Burning Ship or Nova fractals.
-- **Zoom Enhancements**: Implement infinite zoom capabilities with arbitrary precision arithmetic.
+- **Zoom Enhancements**: Implement infinite zoom capabilities with arbitrary precision arithmetic on the GPU.
+- **Optimization**: A potential optimization/improvement could be by creating a point cloud, allowing for constant fps through upscaling, with downscaling while remaining stationary to improve image quality.
+- **Interpolation**: Interpolation could be used to improve image quality, especially in combination with a point cloud.
 
 ## License
 
