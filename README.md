@@ -8,9 +8,8 @@ This project is a real-time renderer for the Mandelbrot and Julia sets, implemen
 - **Interactive Exploration**: Navigate the fractals using keyboard controls for zooming and panning.
 - **Dynamic Julia Set**: The Julia set updates in real-time by indexing the Mandelbrot set at the position of your cursor.
 - **Dual Display**: Renders both the Mandelbrot set and its corresponding Julia set side by side.
-- **Adjustable Parameters**: Modify iteration counts and coloring schemes on the fly.
+- **Adjustable Parameters**: Modify iteration counts and coloring schemes in real time.
 - **High Resolution Support**: Automatically adapts to native screen resolutions, with fullscreen mode available.
-- **Multiple Colouring Schemes**: There are two colouring schemes, a "rainbow" colouring scheme and a "3D" colouring scheme, which can be switched in real time.
 
 ## Technologies Used
 
