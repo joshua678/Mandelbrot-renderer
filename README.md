@@ -19,6 +19,19 @@ This project is a real-time renderer for the Mandelbrot and Julia sets, implemen
 - **SDL_ttf**: Renders text for UI elements like FPS counters.
 - **OpenMP**: Utilized for multi-threading in certain computations.
 
+## Screenshots
+
+### Mandelbrot Set
+
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot1.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot2.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot3.PNG)
+
+### Julia Set
+
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot4.PNG)
+![Mandelbrot Set Screenshot](Example%20images/Mandelbrot5.PNG)
+
 ## Controls
 
 - **Navigation**:
@@ -74,19 +87,6 @@ If you prefer to compile and run the application from source, follow the instruc
    ```
 2. **Open the Project**: Load the `.sln` file in Visual Studio.
 3. **Build the Solution**: Simply build the project. All necessary include directories and libraries are configured using relative paths.
-
-## Screenshots
-
-### Mandelbrot Set
-
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot1.PNG)
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot2.PNG)
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot3.PNG)
-
-### Julia Set
-
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot4.PNG)
-![Mandelbrot Set Screenshot](Example%20images/Mandelbrot5.PNG)
 
 ## Project Structure
 
