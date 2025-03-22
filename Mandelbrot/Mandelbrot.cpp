@@ -12,6 +12,10 @@
 #include <fstream>
 #include <SDL/SDL_ttf.h>
 #include "fractals.h"
+#include <unordered_map>
+#include "globals.h"
+#include "input.h"
+#include "handle errors.h"
 
 #define MAX_SOURCE_SIZE (0x100000)
 
@@ -31,16 +35,10 @@ int screenHeight = 0;
 SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
 
-bool wKey = false, aKey = false, sKey = false, dKey = false,
-eKey = false, qKey = false, downKey = false, upKey = false,
-leftMouseButtonHeld = false;
-array<int, 2> mousePos = { 0, 0 };
-
 std::chrono::time_point<std::chrono::high_resolution_clock> frameStart;
 std::chrono::time_point<std::chrono::high_resolution_clock> frameEnd;
 std::chrono::time_point<std::chrono::high_resolution_clock> p1;
 std::chrono::time_point<std::chrono::high_resolution_clock> p2;
-double deltaTime = 1;
 int frameCounter = 0;
 int fps = 0;
 double timer = 0;
@@ -91,83 +89,6 @@ struct text {
     }
 };
 
-const char* getErrorString(cl_int error)
-{
-    switch (error) {
-        // run-time and JIT compiler errors
-    case 0: return "CL_SUCCESS";
-    case -1: return "CL_DEVICE_NOT_FOUND";
-    case -2: return "CL_DEVICE_NOT_AVAILABLE";
-    case -3: return "CL_COMPILER_NOT_AVAILABLE";
-    case -4: return "CL_MEM_OBJECT_ALLOCATION_FAILURE";
-    case -5: return "CL_OUT_OF_RESOURCES";
-    case -6: return "CL_OUT_OF_HOST_MEMORY";
-    case -7: return "CL_PROFILING_INFO_NOT_AVAILABLE";
-    case -8: return "CL_MEM_COPY_OVERLAP";
-    case -9: return "CL_IMAGE_FORMAT_MISMATCH";
-    case -10: return "CL_IMAGE_FORMAT_NOT_SUPPORTED";
-    case -11: return "CL_BUILD_PROGRAM_FAILURE";
-    case -12: return "CL_MAP_FAILURE";
-    case -13: return "CL_MISALIGNED_SUB_BUFFER_OFFSET";
-    case -14: return "CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST";
-    case -15: return "CL_COMPILE_PROGRAM_FAILURE";
-    case -16: return "CL_LINKER_NOT_AVAILABLE";
-    case -17: return "CL_LINK_PROGRAM_FAILURE";
-    case -18: return "CL_DEVICE_PARTITION_FAILED";
-    case -19: return "CL_KERNEL_ARG_INFO_NOT_AVAILABLE";
-
-        // compile-time errors
-    case -30: return "CL_INVALID_VALUE";
-    case -31: return "CL_INVALID_DEVICE_TYPE";
-    case -32: return "CL_INVALID_PLATFORM";
-    case -33: return "CL_INVALID_DEVICE";
-    case -34: return "CL_INVALID_CONTEXT";
-    case -35: return "CL_INVALID_QUEUE_PROPERTIES";
-    case -36: return "CL_INVALID_COMMAND_QUEUE";
-    case -37: return "CL_INVALID_HOST_PTR";
-    case -38: return "CL_INVALID_MEM_OBJECT";
-    case -39: return "CL_INVALID_IMAGE_FORMAT_DESCRIPTOR";
-    case -40: return "CL_INVALID_IMAGE_SIZE";
-    case -41: return "CL_INVALID_SAMPLER";
-    case -42: return "CL_INVALID_BINARY";
-    case -43: return "CL_INVALID_BUILD_OPTIONS";
-    case -44: return "CL_INVALID_PROGRAM";
-    case -45: return "CL_INVALID_PROGRAM_EXECUTABLE";
-    case -46: return "CL_INVALID_KERNEL_NAME";
-    case -47: return "CL_INVALID_KERNEL_DEFINITION";
-    case -48: return "CL_INVALID_KERNEL";
-    case -49: return "CL_INVALID_ARG_INDEX";
-    case -50: return "CL_INVALID_ARG_VALUE";
-    case -51: return "CL_INVALID_ARG_SIZE";
-    case -52: return "CL_INVALID_KERNEL_ARGS";
-    case -53: return "CL_INVALID_WORK_DIMENSION";
-    case -54: return "CL_INVALID_WORK_GROUP_SIZE";
-    case -55: return "CL_INVALID_WORK_ITEM_SIZE";
-    case -56: return "CL_INVALID_GLOBAL_OFFSET";
-    case -57: return "CL_INVALID_EVENT_WAIT_LIST";
-    case -58: return "CL_INVALID_EVENT";
-    case -59: return "CL_INVALID_OPERATION";
-    case -60: return "CL_INVALID_GL_OBJECT";
-    case -61: return "CL_INVALID_BUFFER_SIZE";
-    case -62: return "CL_INVALID_MIP_LEVEL";
-    case -63: return "CL_INVALID_GLOBAL_WORK_SIZE";
-    case -64: return "CL_INVALID_PROPERTY";
-    case -65: return "CL_INVALID_IMAGE_DESCRIPTOR";
-    case -66: return "CL_INVALID_COMPILER_OPTIONS";
-    case -67: return "CL_INVALID_LINKER_OPTIONS";
-    case -68: return "CL_INVALID_DEVICE_PARTITION_COUNT";
-
-        // extension errors
-    case -1000: return "CL_INVALID_GL_SHAREGROUP_REFERENCE_KHR";
-    case -1001: return "CL_PLATFORM_NOT_FOUND_KHR";
-    case -1002: return "CL_INVALID_D3D10_DEVICE_KHR";
-    case -1003: return "CL_INVALID_D3D10_RESOURCE_KHR";
-    case -1004: return "CL_D3D10_RESOURCE_ALREADY_ACQUIRED_KHR";
-    case -1005: return "CL_D3D10_RESOURCE_NOT_ACQUIRED_KHR";
-    default: return "Unknown OpenCL error";
-    }
-}
-
 array<int, 3> palette(double pos, double size) {
     return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), 
         (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), 
@@ -178,168 +99,6 @@ void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
     cl_mem temp = mem1;
     mem1 = mem2;
     mem2 = temp;
-}
-
-bool handleInput(fractal &activeFractal, mandelbrotSet &mandelbrot, juliaSet &julia) { //returns true if program quit requested
-    SDL_Event event;
-    while (SDL_PollEvent(&event) != 0)
-    {
-        if (event.type == SDL_QUIT)
-        {
-            return true;
-        }
-        else if (event.type == SDL_KEYDOWN)
-        {
-            if (event.key.keysym.sym == SDLK_w)
-            {
-                wKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_a)
-            {
-                aKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_s)
-            {
-                sKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_d)
-            {
-                dKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_e)
-            {
-                eKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_q)
-            {
-                qKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_DOWN)
-            {
-                downKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_UP)
-            {
-                upKey = true;
-            }
-            if (event.key.keysym.sym == SDLK_LSHIFT)
-            {
-                activeFractal.zoomSpeed = 1.2;
-                activeFractal.moveSpeed = 0.45;
-            }
-            if (event.key.keysym.sym == SDLK_SPACE)
-            {
-                activeFractal.colouringScheme = (activeFractal.colouringScheme + 1) % 2;
-                julia.framesToUpdate = 4;
-                mandelbrot.framesToUpdate = 4;
-            }
-        }
-        else if (event.type == SDL_KEYUP)
-        {
-            if (event.key.keysym.sym == SDLK_w)
-            {
-                wKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_a)
-            {
-                aKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_s)
-            {
-                sKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_d)
-            {
-                dKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_e)
-            {
-                eKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_q)
-            {
-                qKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_DOWN)
-            {
-                downKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_UP)
-            {
-                upKey = false;
-            }
-            if (event.key.keysym.sym == SDLK_LSHIFT)
-            {
-                activeFractal.zoomSpeed = 0.4;
-                activeFractal.moveSpeed = 0.15;
-            }
-        }
-        else if (event.type == SDL_MOUSEBUTTONDOWN) {
-            if (event.button.button == SDL_BUTTON_LEFT) {
-                leftMouseButtonHeld = true;
-            }
-        }
-        else if (event.type == SDL_MOUSEBUTTONUP) {
-            if (event.button.button == SDL_BUTTON_LEFT) {
-                leftMouseButtonHeld = false;
-            }
-        }
-    }
-    if (wKey == true) {
-        activeFractal.position[1] -= activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
-        activeFractal.framesToUpdate = 4;
-    }
-    if (aKey == true) {
-        activeFractal.position[0] -= activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
-        activeFractal.framesToUpdate = 4;
-    }
-    if (sKey == true) {
-        activeFractal.position[1] += activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
-        activeFractal.framesToUpdate = 4;
-    }
-    if (dKey == true) {
-        activeFractal.position[0] += activeFractal.moveSpeed * activeFractal.zoom * deltaTime;
-        activeFractal.framesToUpdate = 4;
-    }
-    if (eKey == true) {
-        activeFractal.zoom /= (1 + activeFractal.zoomSpeed * deltaTime);
-        activeFractal.framesToUpdate = 4;
-    }
-    if (qKey == true) {
-        activeFractal.zoom *= (1 + activeFractal.zoomSpeed * deltaTime);
-        activeFractal.framesToUpdate = 4;
-    }
-    if (downKey == true) {
-        if (activeFractal.maxIterations > activeFractal.maxIterationsFloor) {
-            activeFractal.maxIterations /= (1 + 0.5 * deltaTime);
-            activeFractal.framesToUpdate = 4;
-        }
-        DBOUT(mandelbrot.maxIterations << "\n");
-    }
-    if (upKey == true) {
-        activeFractal.maxIterations = activeFractal.maxIterations*(1 + 0.5 * deltaTime) + 1;
-        activeFractal.framesToUpdate = 4;
-        DBOUT(activeFractal.maxIterations << "\n");
-    }
-    if (leftMouseButtonHeld && activeFractal.type == "mandelbrotSet") {
-        julia.framesToUpdate = 4;
-        array<int, 2> newMouseState = { 0,0 };
-        SDL_GetMouseState(&newMouseState[0], &newMouseState[1]);
-        if (newMouseState[0] <= mandelbrot.width + mandelbrotGap
-            && newMouseState[1] <= mandelbrot.height + mandelbrotGap
-            && newMouseState[0] >= mandelbrotGap
-            && newMouseState[1] >= mandelbrotGap) {
-            mousePos = newMouseState;
-        }
-
-        julia.index[0] = ((double)(mousePos[0] - mandelbrotGap) / mandelbrot.width - 0.5) * mandelbrot.zoom * ((double)mandelbrot.width / mandelbrot.height) + mandelbrot.position[0];
-        julia.index[1] = ((double)(mousePos[1] - mandelbrotGap) / mandelbrot.height - 0.5) * mandelbrot.zoom + mandelbrot.position[1];
-
-        julia.position[0] = 0;
-        julia.position[1] = 0;
-        julia.zoom = 3;
-    }
-    return false;
 }
 
 std::string loadKernelSource(const std::string& filename) {
@@ -389,6 +148,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     if (screenWidth == 0) {
         screenWidth = DM.w;
+        DBOUT(screenWidth);
     }
     if (screenHeight == 0) {
         screenHeight = DM.h;
@@ -426,28 +186,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 
 
-    //cl_device_id* devices = new cl_device_id[1];
-    //cl_uint num_devices;
-    //cl_platform_id* platforms;
-    //cl_uint num_platforms;
-    //clGetPlatformIDs(0, NULL, &num_platforms);
-    //platforms = new cl_platform_id[num_platforms];
-    //clGetPlatformIDs(num_platforms, platforms, NULL);
-    //cl_int err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 1, &devices[0], &num_devices);
-    //if (err != CL_SUCCESS) {
-    //    std::cerr << "Error: Failed to retrieve device IDs!" << std::endl;
-    //    exit(1);
-    //}
-    //cl_device_id device = devices[0];
-
-
-
-
-    
-
-
-
-// OpenCL initialization with platform and device selection
+    // OpenCL initialization with platform and device selection
     cl_int err;
     cl_uint num_platforms = 0;
     err = clGetPlatformIDs(0, NULL, &num_platforms);
@@ -472,12 +211,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             std::cerr << "Error: Failed to get platform name!" << std::endl;
             exit(1);
         }
-        // Uncomment the following line to see all platform names
-        // std::cout << "Platform " << i << ": " << platformName << std::endl;
-
-        // You could optionally check for specific platforms (NVIDIA, AMD, etc.)
-        // For example, to check for AMD: if (strstr(platformName, "AMD") != NULL)
-        selectedPlatform = platforms[i]; // Pick the first available platform (or add custom logic here)
+        selectedPlatform = platforms[i]; // Pick the first available platform
         break;
     }
 
@@ -503,7 +237,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     cl_device_id device = devices[0];
 
-    // Optionally, print the device name
     char deviceName[128];
     err = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(deviceName), deviceName, NULL);
     if (err != CL_SUCCESS) {
@@ -511,11 +244,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         exit(1);
     }
     std::cout << "Using device: " << deviceName << std::endl;
-
-
-
-
-
 
 
 
@@ -603,22 +331,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     mandelbrotIterationText.colour = { 255, 255, 255, 255 };
     text juliaIterationText("Julia iterations: ", 300, 0, 14);
     juliaIterationText.colour = { 255, 255, 255, 255 };
-
-
-
-
-
-    /*vector<grid> pointBatches100k;
-    vector<grid> pointBatches1m;
-
-    DBOUT("generating points...");
-    p1 = std::chrono::high_resolution_clock::now();
-    pointBatches1m.push_back(generatePoints(mandelbrot, sqrt(2)));
-    p2 = std::chrono::high_resolution_clock::now();
-
-    long double thing = (long double)(chrono::duration_cast<chrono::microseconds>(p2 - p1).count()) / 1000000;
-    DBOUT("generated points in " << thing << "s" << endl);*/
-
 
 
 

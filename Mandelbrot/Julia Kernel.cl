@@ -5,8 +5,14 @@ inline int palette(double pos, double rateOfChange, int colour) { //pos between 
     if (colour == 2) { return (int)round(127.5 * sin(rateOfChange * 2 * M_PI * pos + (4.0 / 3.0) * M_PI + 1) + 127.5); }
     return 0;
 }
+
+typedef struct {
+    double real;
+    double imag;
+} complexDouble;
+
 __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHeight, double zoom,
-    double position_x, double position_y, int maxIterations, __global const int* workQueue, __global int* globalIndex, int colouringScheme, double c_x, double c_y) {
+    double positionX, double positionY, int maxIterations, __global const int* workQueue, __global int* globalIndex, int colouringScheme, double cX, double cY) {
     if (colouringScheme == 0) {
         int i = get_global_id(0);
         int totalPixels = screenWidth * screenHeight;
@@ -19,32 +25,32 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
             int y = pixelIndex / screenHeight;
             double aspectRatio = (double)screenWidth / screenHeight;
             int iteration = 0;
-            double z[2] = { ((double)x / screenWidth - 0.5) * zoom * aspectRatio + position_x, ((double)y / screenWidth - 0.5) * zoom + position_y };
-            double c[2] = { c_x, c_y };
-            double xold = 0;
-            double yold = 0;
+            complexDouble z = { ((double)x / screenWidth - 0.5) * zoom * aspectRatio + positionX, ((double)y / screenWidth - 0.5) * zoom + positionY };
+            complexDouble zOld = { 0,0 };
+            const complexDouble complexPoint = { cX, cY };
+            int boundedThreshold = 8 * 8;
             int period = 0;
 
-            //stops when abs(z)>=8 (that is, when pixel coordinates are not on the mandlebrot set)
-            while (z[0] * z[0] + z[1] * z[1] < 64 && ++iteration < maxIterations) {
-                //z = z^2 + c
-                temp = 2 * z[0] * z[1] + c[1];
-                z[0] = z[0] * z[0] - z[1] * z[1] + c[0];
-                z[1] = temp;
+            // stops when abs(z) >= sqrt(boundedThreshold), at which point we estimate that z is unbounded at complexPoint, so that complexPoint is not in the mandelbrot set
+            while (z.real * z.real + z.imag * z.imag < boundedThreshold && ++iteration < maxIterations) {
+                // z = z^2 + c
+                temp = 2 * z.real * z.imag + complexPoint.imag;
+                z.real = z.real * z.real - z.imag * z.imag + complexPoint.real;
+                z.imag = temp;
 
-                if (z[0] == xold && z[1] == yold) {
+                if (z.real == zOld.real && z.imag == zOld.imag) {
                     iteration = maxIterations;
                     break;
                 }
 
                 if (period++ > 50) {
                     period = 0;
-                    xold = z[0];
-                    yold = z[1];
+                    zOld.real = z.real;
+                    zOld.imag = z.imag;
                 }
             }
 
-            double rationalIteration = iteration + 2 - log(log(z[0] * z[0] + z[1] * z[1])) / log((double)2);
+            double rationalIteration = iteration + 2 - log(log(z.real * z.real + z.imag * z.imag)) / log((double)2);
             if (iteration == maxIterations) {
                 pixelArr[pixelIndex] = 0; //red
                 pixelArr[totalPixels + pixelIndex] = 0; //green
@@ -68,7 +74,7 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
         double h2 = 1.5;
         double angle = 45;
         double radians = angle * (pi / 180);
-        double v[2] = { cos(radians), sin(radians) };
+        complexDouble v = { cos(radians), sin(radians) };
         double R = 100;
 
         while (idx < totalPixels) {
@@ -77,60 +83,60 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
             int y = pixelIndex / screenHeight;
             double aspectRatio = (double)screenWidth / screenHeight;
             int iteration = 0;
-            double z[2] = { ((double)x / screenWidth - 0.5) * zoom * aspectRatio + position_x, ((double)y / screenWidth - 0.5) * zoom + position_y };
-            double c[2] = { c_x, c_y };
-            double xold = 0;
-            double yold = 0;
+            complexDouble z = { ((double)x / screenWidth - 0.5) * zoom * aspectRatio + positionX, ((double)y / screenWidth - 0.5) * zoom + positionY };
+            complexDouble zOld = { 0,0 };
+            const complexDouble complexPoint = { cX, cY };
+            int boundedThreshold = 8 * 8;
             int period = 0;
 
-            double dc[2] = { 1,0 };
-            double der[2] = { 1,0 };
+            complexDouble dc = { 1,0 };
+            complexDouble der = { 1,0 };
 
-            //stops when abs(z)>=8 (that is, when pixel coordinates are not on the mandlebrot set)
-            while (z[0] * z[0] + z[1] * z[1] < 64 && ++iteration < maxIterations) {
-                //der = der*2*z + dc
-                temp = (der[0] * z[1] + der[1] * z[0]) * 2 + dc[1];
-                der[0] = (der[0] * z[0] - der[1] * z[1]) * 2 + dc[0];
-                der[1] = temp;
+            // stops when abs(z) >= sqrt(boundedThreshold), at which point we estimate that z is unbounded at complexPoint, so that complexPoint is not in the mandelbrot set
+            while (z.real * z.real + z.imag * z.imag < boundedThreshold && ++iteration < maxIterations) {
+                // der = der*2*z + dc
+                temp = (der.real * z.imag + der.imag * z.real) * 2 + dc.imag;
+                der.real = (der.real * z.real - der.imag * z.imag) * 2 + dc.real;
+                der.imag = temp;
 
-                //z = z^2 + c
-                temp = 2 * z[0] * z[1] + c[1];
-                z[0] = z[0] * z[0] - z[1] * z[1] + c[0];
-                z[1] = temp;
+                // z = z^2 + c
+                temp = 2 * z.real * z.imag + complexPoint.imag;
+                z.real = z.real * z.real - z.imag * z.imag + complexPoint.real;
+                z.imag = temp;
 
-                if (z[0] == xold && z[1] == yold) {
+                if (z.real == zOld.real && z.imag == zOld.imag) {
                     iteration = maxIterations;
                     break;
                 }
 
                 if (period++ > 50) {
                     period = 0;
-                    xold = z[0];
-                    yold = z[1];
+                    zOld.real = z.real;
+                    zOld.imag = z.imag;
                 }
             }
 
             if (iteration == maxIterations) {
-                pixelArr[pixelIndex] = 0; //red
-                pixelArr[totalPixels + pixelIndex] = 0; //green
-                pixelArr[totalPixels * 2 + pixelIndex] = 0; //blue
+                pixelArr[pixelIndex] = 0; // red
+                pixelArr[totalPixels + pixelIndex] = 0; // green
+                pixelArr[totalPixels * 2 + pixelIndex] = 0; // blue
             }
             else {
-                //u = z/der
-                double denom = der[0] * der[0] + der[1] * der[1];
-                double u[2] = {
-                    (z[0] * der[0] + z[1] * der[1]) / denom,
-                    (z[1] * der[0] - z[0] * der[1]) / denom
+                // u = z/der
+                double denom = der.real * der.real + der.imag * der.imag;
+                complexDouble u = {
+                    (z.real * der.real + z.imag * der.imag) / denom,
+                    (z.imag * der.real - z.real * der.imag) / denom
                 };
 
-                //temp = abs(u)
-                temp = sqrt(u[0] * u[0] + u[1] * u[1]);
+                // temp = abs(u)
+                temp = sqrt(u.real * u.real + u.imag * u.imag);
 
-                //u = u/abs(u)
-                u[0] = u[0] / temp;
-                u[1] = u[1] / temp;
+                // u = u/abs(u)
+                u.real = u.real / temp;
+                u.imag = u.imag / temp;
 
-                double t = u[0] * v[0] - u[1] * v[1] + h2;
+                double t = u.real * v.real - u.imag * v.imag + h2;
 
                 t /= 1 + h2;
 
