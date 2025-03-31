@@ -26,8 +26,7 @@ const bool debugFrameTime = 1;
 const bool fullscreen = 1;
 bool FPSCounter = 1;
 bool shouldRenderJuliaSet = 1;
-int mandelbrotGap = 15; //in pixels
-int frameRateCap = 0; //set to 0 for native refresh rate
+int frameRateCap = 0; //set to 0 for native refresh rate, -1 for uncapped
 //set to 0 to get native resolution
 int screenWidth = 0;
 int screenHeight = 0;
@@ -41,7 +40,6 @@ std::chrono::time_point<std::chrono::high_resolution_clock> p1;
 std::chrono::time_point<std::chrono::high_resolution_clock> p2;
 int frameCounter = 0;
 int fps = 0;
-double timer = 0;
 double timerPoint = 0;
 int frameCounterPoint = 0;
 double frameStall = 0;
@@ -88,12 +86,6 @@ struct text {
         rect = { x, y, surface->w, surface->h };
     }
 };
-
-array<int, 3> palette(double pos, double size) {
-    return { (int)round(127.5 * sin(2 * M_PI * pos) + 127.5), 
-        (int)round(127.5 * sin(2 * M_PI * pos + (2.0/3.0)*M_PI) + 127.5), 
-        (int)round(127.5 * sin(2 * M_PI * pos + (4.0 / 3.0) * M_PI) + 127.5) };
-}
 
 void swapClMemObjects(cl_mem& mem1, cl_mem& mem2) {
     cl_mem temp = mem1;
@@ -253,7 +245,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     mandelbrotSet mandelbrot(screenWidth * 0.7, screenHeight - mandelbrotGap * 2, renderer, window, context, device);
     mandelbrot.position[0] = -0.7;
-    juliaSet julia(screenWidth - mandelbrot.width - mandelbrotGap * 3, screenWidth - mandelbrot.width - mandelbrotGap * 3, renderer, window, context, device);
+    juliaSet julia(screenWidth - mandelbrot.width - mandelbrotGap, screenWidth - mandelbrot.width - mandelbrotGap, renderer, window, context, device);
 
     cl_program mandelbrotProgram = clCreateProgramWithSource(context, 1, &mandelbrotSourceStr, NULL, &err);
 
@@ -350,9 +342,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             swapFractalSizes(julia, mandelbrot, context, device);
         }
 
-        if (timer - timerPoint > 1) {
-            fps = (int)((double)(frameCounter - frameCounterPoint) / (timer - timerPoint));
-            timerPoint = timer;
+        if (timeElapsed - timerPoint > 1) {
+            fps = (int)((double)(frameCounter - frameCounterPoint) / (timeElapsed - timerPoint));
+            timerPoint = timeElapsed;
             frameCounterPoint = frameCounter;
         }
         fpsText.setText("FPS: " + to_string(fps));
@@ -370,21 +362,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             std::swap(mandelbrot.readPixelArr, mandelbrot.writePixelArr);
             swapClMemObjects(mandelbrot.d_readPixelArr, mandelbrot.d_writePixelArr);
 
-            //vector<array<double, 2>> points = pointBatches1m[0].samples;
             mandelbrot.setKernelArgs(mandelbrotKernel);
             mandelbrot.writeBuffers();
 
             // Transfer data from device to host
-            err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(uint32_t) * 3, mandelbrot.readPixelArr, 0, NULL, NULL);
+            err = clEnqueueReadBuffer(mandelbrot.queue, mandelbrot.d_readPixelArr, CL_FALSE, 0, mandelbrot.width * mandelbrot.height * sizeof(uint32_t), mandelbrot.readPixelArr, 0, NULL, NULL);
 
             // Execute the mandelbrot kernel
             clEnqueueNDRangeKernel(mandelbrot.queue, mandelbrotKernel, 1, NULL, &mandelbrot.globalWorkSize, NULL, 0, NULL, NULL);
 
             clFinish(mandelbrot.queue);
 
-            //createPoints(1, mandelbrot, pointBatches1m[0]);
-
-            mandelbrot.mapRGBReadPixelArr((uint32_t*)mandelbrot.surface->pixels);
+            //set pixels of surface
+            memcpy(mandelbrot.surface->pixels, mandelbrot.readPixelArr, mandelbrot.width * mandelbrot.height * sizeof(uint32_t));
             
             mandelbrot.framesToUpdate--;
         }
@@ -397,21 +387,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             julia.setKernelArgs(juliaKernel);
             julia.writeBuffers();
 
-            err = clEnqueueReadBuffer(julia.queue, julia.d_readPixelArr, CL_FALSE, 0, julia.width * julia.height * sizeof(uint32_t) * 3, julia.readPixelArr, 0, NULL, NULL);
+            err = clEnqueueReadBuffer(julia.queue, julia.d_readPixelArr, CL_FALSE, 0, julia.width * julia.height * sizeof(uint32_t), julia.readPixelArr, 0, NULL, NULL);
 
             clEnqueueNDRangeKernel(julia.queue, juliaKernel, 1, NULL, &julia.globalWorkSize, NULL, 0, NULL, NULL);
 
-            julia.mapRGBReadPixelArr((uint32_t*)julia.surface->pixels);
+            memcpy(julia.surface->pixels, julia.readPixelArr, julia.width * julia.height * sizeof(uint32_t));
 
             clFinish(julia.queue);
 
             julia.framesToUpdate--;
         }
 
-
-        frameStall += (1.0 / frameRateCap) - deltaTime;
-        if (frameStall > 0) {
-            SDL_Delay(frameStall * 1000);
+        if (frameRateCap != -1) {
+            frameStall += (1.0 / frameRateCap) - deltaTime;
+            if (frameStall > 0) {
+                SDL_Delay(frameStall * 1000);
+            }
         }
 
         //update screen
@@ -433,7 +424,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         frameCounter++;
         frameEnd = std::chrono::high_resolution_clock::now();
         deltaTime = (long double)(chrono::duration_cast<chrono::microseconds>(frameEnd - frameStart).count()) / 1000000;
-        timer += deltaTime;
+        timeElapsed += deltaTime;
     }
 
     delete[] devices;

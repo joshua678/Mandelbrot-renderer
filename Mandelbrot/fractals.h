@@ -7,6 +7,7 @@
 #include <limits>
 #include <tuple>
 #include <memory>
+#include <cstring>
 
 using namespace std;
 
@@ -55,8 +56,8 @@ public:
     fractal(int newWidth, int newHeight, SDL_Renderer* renderer, SDL_Window* window, cl_context context, cl_device_id device)
         : width(newWidth), height(newHeight) {
 
-        writePixelArr = new uint32_t[width * height * 3];
-        readPixelArr = new uint32_t[width * height * 3];
+        writePixelArr = new uint32_t[width * height];
+        readPixelArr = new uint32_t[width * height];
         workQueue = new int[width * height];
 
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
@@ -95,11 +96,11 @@ public:
 
         queueProperties = 0;
         queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
+        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t), NULL, &err);
+        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t), NULL, &err);
 
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t), readPixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t), writePixelArr, 0, NULL, NULL);
 
         for (int i = 0; i < width * height; ++i) {
             workQueue[i] = i;
@@ -144,29 +145,69 @@ public:
         }
     }
 
-    void mapRGBReadPixelArr(uint32_t* pixelsToSet) {
-#pragma omp parallel for
-        for (int l = 0; l < height; l++) {
-            for (int i = 0; i < width; i++) {
-                pixelsToSet[l * width + i] = SDL_MapRGB(surface->format,
-                    readPixelArr[l * width + i],
-                    readPixelArr[width * height + l * width + i],
-                    readPixelArr[width * height * 2 + l * width + i]);
-            }
-        }
-    }
+    /*void mapRGBReadPixelArr(uint32_t* pixelsToSet)
+    {
+        // A 3x3 Gaussian-like kernel
+        // Typically, you want to sum to 16 (1+2+1 + 2+4+2 + 1+2+1)
+        // You can tweak these values or use a true Gaussian distribution
+        static const int kernel[3][3] = {
+            { 1, 2, 1 },
+            { 2, 8, 2 },
+            { 1, 2, 1 }
+        };
+        static const int kernelWeightSum = 16; // sum of all the above values
 
-    void mapRGBReadPixelArrBlack(uint32_t* pixelsToSet) {
 #pragma omp parallel for
-        for (int l = 0; l < height; l++) {
-            for (int i = 0; i < width; i++) {
-                pixelsToSet[l * width + i] = SDL_MapRGB(surface->format,
-                    0,
-                    0,
-                    0);
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int sumR = 0;
+                int sumG = 0;
+                int sumB = 0;
+                int totalWeight = 0;
+
+                // Visit the 3x3 neighborhood
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int ny = y + dy;
+                        int nx = x + dx;
+
+                        // Check boundaries
+                        if (ny >= 0 && ny < height && nx >= 0 && nx < width)
+                        {
+                            // Get the kernel weight for the (dy, dx) position
+                            int kw = kernel[dy + 1][dx + 1];
+
+                            // Accumulate weighted R, G, B
+                            sumR += readPixelArr[ny * width + nx] * kw;
+                            sumG += readPixelArr[width * height + ny * width + nx] * kw;
+                            sumB += readPixelArr[2 * width * height + ny * width + nx] * kw;
+
+                            // Accumulate total weight
+                            totalWeight += kw;
+                        }
+                    }
+                }
+
+                // If for some reason totalWeight stays 0 (e.g. on an empty image),
+                // we can fallback to the pixel itself or clamp at 1.
+                if (totalWeight == 0) {
+                    totalWeight = 1;
+                }
+
+                // Compute averages
+                Uint8 avgR = static_cast<Uint8>(sumR / totalWeight);
+                Uint8 avgG = static_cast<Uint8>(sumG / totalWeight);
+                Uint8 avgB = static_cast<Uint8>(sumB / totalWeight);
+
+                // Set pixel in output
+                pixelsToSet[y * width + x] = SDL_MapRGB(surface->format, avgR, avgG, avgB);
             }
         }
-    }
+    }*/
 
     void writeBuffers() {
 
@@ -217,8 +258,8 @@ public:
 
         width = newWidth;
         height = newHeight;
-        writePixelArr = new uint32_t[width * height * 3];
-        readPixelArr = new uint32_t[width * height * 3];
+        writePixelArr = new uint32_t[width * height];
+        readPixelArr = new uint32_t[width * height];
         workQueue = new int[width * height];
 
         surface = SDL_CreateRGBSurface(0, width, height, 32, rmask, gmask, bmask, amask);
@@ -245,11 +286,11 @@ public:
 
         queueProperties = 0;
         queue = clCreateCommandQueueWithProperties(context, device, &queueProperties, &err);
-        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
-        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t) * 3, NULL, &err);
+        d_readPixelArr = clCreateBuffer(context, CL_MEM_READ_ONLY, width * height * sizeof(uint32_t), NULL, &err);
+        d_writePixelArr = clCreateBuffer(context, CL_MEM_WRITE_ONLY, width * height * sizeof(uint32_t), NULL, &err);
 
-        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, readPixelArr, 0, NULL, NULL);
-        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t) * 3, writePixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_readPixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t), readPixelArr, 0, NULL, NULL);
+        err = clEnqueueWriteBuffer(queue, d_writePixelArr, CL_TRUE, 0, width * height * sizeof(uint32_t), writePixelArr, 0, NULL, NULL);
 
         for (int i = 0; i < width * height; ++i) {
             workQueue[i] = i;

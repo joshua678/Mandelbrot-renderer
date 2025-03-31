@@ -11,7 +11,7 @@ typedef struct {
     double imag;
 } complexDouble;
 
-__kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHeight, double zoom,
+__kernel void juliaKernel(__global uint* pixelArr, int screenWidth, int screenHeight, double zoom,
     double positionX, double positionY, int maxIterations, __global const int* workQueue, __global int* globalIndex, int colouringScheme, double cX, double cY) {
     if (colouringScheme == 0) {
         int i = get_global_id(0);
@@ -52,14 +52,13 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
 
             double rationalIteration = iteration + 2 - log(log(z.real * z.real + z.imag * z.imag)) / log((double)2);
             if (iteration == maxIterations) {
-                pixelArr[pixelIndex] = 0; //red
-                pixelArr[totalPixels + pixelIndex] = 0; //green
-                pixelArr[totalPixels * 2 + pixelIndex] = 0; //blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24); // black
             }
             else {
-                pixelArr[pixelIndex] = palette(rationalIteration, 1, 0); //red
-                pixelArr[totalPixels + pixelIndex] = palette(rationalIteration, 1, 1); //green
-                pixelArr[totalPixels * 2 + pixelIndex] = palette(rationalIteration, 1, 2); //blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24)
+                    | ((uint)(palette(rationalIteration, 1, 0)) << 16) // red
+                    | ((uint)(palette(rationalIteration, 1, 1)) << 8) // green
+                    | ((uint)(palette(rationalIteration, 1, 2)) << 0); // blue
             }
             idx = atomic_inc(globalIndex);
         }
@@ -117,9 +116,7 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
             }
 
             if (iteration == maxIterations) {
-                pixelArr[pixelIndex] = 0; // red
-                pixelArr[totalPixels + pixelIndex] = 0; // green
-                pixelArr[totalPixels * 2 + pixelIndex] = 0; // blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24); // black
             }
             else {
                 // u = z/der
@@ -142,10 +139,10 @@ __kernel void juliaKernel(__global int* pixelArr, int screenWidth, int screenHei
 
                 if (t < 0) { t = 0; }
 
-
-                pixelArr[pixelIndex] = 255 * t; //red
-                pixelArr[totalPixels + pixelIndex] = 255 * t; //green
-                pixelArr[totalPixels * 2 + pixelIndex] = 255 * t; //blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24)
+                    | ((uint)(255 * t) << 16) // red
+                    | ((uint)(255 * t) << 8) // green
+                    | ((uint)(255 * t) << 0); // blue
             }
             idx = atomic_inc(globalIndex);
         }

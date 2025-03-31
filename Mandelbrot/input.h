@@ -10,6 +10,8 @@ unordered_map<SDL_Keycode, bool> activatedKeyCodesMap;
 int pressedKeys = 0;
 bool leftMouseButtonHeld = false;
 array<int, 2> mousePos = { 0, 0 };
+double spaceBarCoolDown = 0.5; // seconds
+double timeElapsedAtSpaceBar = 0;
 
 bool handleInput(fractal& activeFractal, mandelbrotSet& mandelbrot, juliaSet& julia) { //returns true if program quit requested
     SDL_Event event;
@@ -43,13 +45,12 @@ bool handleInput(fractal& activeFractal, mandelbrotSet& mandelbrot, juliaSet& ju
         activeFractal.zoomSpeed = 0.4;
         activeFractal.moveSpeed = 0.15;
     }
-    if (activatedKeyCodesMap[SDLK_SPACE] && !lockColourScheme) {
+    if (activatedKeyCodesMap[SDLK_SPACE] && timeElapsed - timeElapsedAtSpaceBar > spaceBarCoolDown) {
         activeFractal.colouringScheme = (activeFractal.colouringScheme + 1) % 2;
         julia.framesToUpdate = 4;
         mandelbrot.framesToUpdate = 4;
-        lockColourScheme = true;
+        timeElapsedAtSpaceBar = timeElapsed;
     }
-    else { lockColourScheme = false; }
 
     if (pressedKeys > 0) { activeFractal.framesToUpdate = 4; }
 

@@ -6,12 +6,44 @@ inline int palette(double pos, double rateOfChange, int colour) { //pos between 
     return 0;
 }
 
+__constant uint colorGradient[8] = {
+    0xFF000000u, // black
+    0xFF0000FFu, // blue
+    0xFF00FFFFu, // cyan
+    0xFF00FF00u, // green
+    0xFFFFFF00u, // yellow
+    0xFFFF0000u, // red
+    0xFFFF00FFu, // magenta
+    0xFFFFFFFFu  // white
+};
+#define GRADIENT_SIZE 8
+
+inline uint interpolateColor(uint c1, uint c2, float fraction)
+{
+    uint A1 = (c1 >> 24) & 0xFF;
+    uint R1 = (c1 >> 16) & 0xFF;
+    uint G1 = (c1 >> 8) & 0xFF;
+    uint B1 = (c1) & 0xFF;
+
+    uint A2 = (c2 >> 24) & 0xFF;
+    uint R2 = (c2 >> 16) & 0xFF;
+    uint G2 = (c2 >> 8) & 0xFF;
+    uint B2 = (c2) & 0xFF;
+
+    uint A = (uint)((1.0f - fraction) * A1 + fraction * A2);
+    uint R = (uint)((1.0f - fraction) * R1 + fraction * R2);
+    uint G = (uint)((1.0f - fraction) * G1 + fraction * G2);
+    uint B = (uint)((1.0f - fraction) * B1 + fraction * B2);
+
+    return (A << 24) | (R << 16) | (G << 8) | B;
+}
+
 typedef struct {
     double real;
     double imag;
 } complexDouble;
 
-__kernel void mandelbrotKernel(__global int* pixelArr, int screenWidth, int screenHeight, double zoom,
+__kernel void mandelbrotKernel(__global uint* pixelArr, int screenWidth, int screenHeight, double zoom,
     double positionX, double positionY, int maxIterations, __global const int* workQueue, __global int* globalIndex, int colouringScheme) {
     if (colouringScheme == 0) {
         int i = get_global_id(0);
@@ -52,14 +84,13 @@ __kernel void mandelbrotKernel(__global int* pixelArr, int screenWidth, int scre
 
             double rationalIteration = iteration + 2 - log(log(z.real * z.real + z.imag * z.imag)) / log((double)2);
             if (iteration == maxIterations) {
-                pixelArr[pixelIndex] = 0; // red
-                pixelArr[totalPixels + pixelIndex] = 0; // green
-                pixelArr[totalPixels * 2 + pixelIndex] = 0; // blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24); // black
             }
             else {
-                pixelArr[pixelIndex] = palette(rationalIteration, 1, 0); // red
-                pixelArr[totalPixels + pixelIndex] = palette(rationalIteration, 1, 1); // green
-                pixelArr[totalPixels * 2 + pixelIndex] = palette(rationalIteration, 1, 2); // blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24)
+                    | ((uint)(palette(rationalIteration, 1, 0)) << 16) // red
+                    | ((uint)(palette(rationalIteration, 1, 1)) << 8) // green
+                    | ((uint)(palette(rationalIteration, 1, 2)) << 0); // blue
             }
             idx = atomic_inc(globalIndex);
         }
@@ -117,9 +148,7 @@ __kernel void mandelbrotKernel(__global int* pixelArr, int screenWidth, int scre
             }
 
             if (iteration == maxIterations) {
-                pixelArr[pixelIndex] = 0; // red
-                pixelArr[totalPixels + pixelIndex] = 0; // green
-                pixelArr[totalPixels * 2 + pixelIndex] = 0; // blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24); // black
             }
             else {
                 // u = z/der
@@ -142,10 +171,10 @@ __kernel void mandelbrotKernel(__global int* pixelArr, int screenWidth, int scre
 
                 if (t < 0) { t = 0; }
 
-
-                pixelArr[pixelIndex] = 255 * t; // red
-                pixelArr[totalPixels + pixelIndex] = 255 * t; // green
-                pixelArr[totalPixels * 2 + pixelIndex] = 255 * t; // blue
+                pixelArr[pixelIndex] = ((uint)(255) << 24)
+                    | ((uint)(t * 255) << 16) // red
+                    | ((uint)(t * 255) << 8) // green
+                    | ((uint)(t * 255) << 0); // blue
             }
             idx = atomic_inc(globalIndex);
         }
